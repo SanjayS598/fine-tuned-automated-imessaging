@@ -107,7 +107,10 @@ def train(iters):
     config.private_dir(prepared)
     for name in ("train", "valid"):
         entries = []
-        for line in (data / (name+".jsonl")).read_text().splitlines():
+        # splitlines() also splits literal U+2028/U+0085 inside valid JSON strings.
+        for line in (data / (name+".jsonl")).read_text().split("\n"):
+            if not line.strip():
+                continue
             entry = fit_example(json.loads(line), tokenizer)
             if entry:
                 entries.append(entry)

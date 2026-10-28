@@ -41,6 +41,9 @@ def main():
     init.add_argument("--number", required=True)
     for name in ("doctor", "status", "chats", "on", "off", "toggle", "run", "previews", "verify-sender", "chat"):
         sub.add_parser(name)
+    ui = sub.add_parser("ui", help="Open the local Messages inbox and reply controls")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--no-open", action="store_true")
     for name in ("allow", "deny", "identity"):
         command = sub.add_parser(name)
         command.add_argument("contact")
@@ -102,7 +105,7 @@ def dispatch(args):
     elif cmd in ("on", "off", "toggle"):
         def edit(value):
             enabled = (not value["enabled"]) if cmd == "toggle" else cmd == "on"
-            if enabled and not value["allowed_contacts"]:
+            if enabled and not value["allowed_contacts"] and not any(x["enabled"] for x in value.get("chat_settings", {}).values()):
                 raise ValueError("Add an approved contact with allow first.")
             if enabled and not value["dry_run"] and not value["sender_verified"]:
                 raise ValueError("Run verify-sender after checking your number in Messages Settings.")
@@ -125,6 +128,9 @@ def dispatch(args):
     elif cmd == "run":
         from .runner import run
         run()
+    elif cmd == "ui":
+        from .web import serve
+        serve(args.port, open_browser=not args.no_open)
     elif cmd == "previews":
         from .state import State
         state = State()

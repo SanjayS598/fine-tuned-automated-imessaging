@@ -77,7 +77,11 @@ class Runner:
         if self.model is None or key != self.model_key:
             self.model = self.factory(cfg)
             self.model_key = key
-        reply = self.model.reply(turns, cfg)
+        model_cfg = dict(cfg)
+        instructions = cfg.get("chat_settings", {}).get(str(row["chat_id"]), {}).get("instructions", "").strip()
+        if instructions:
+            model_cfg["system_prompt"] += "\n\nOwner's instructions for this conversation:\n" + instructions
+        reply = self.model.reply(turns, model_cfg)
         # Model loading/generation may take a while. Check stop switch, allowlist,
         # freshness and manual replies again immediately before reserving a send.
         if not reply or not self.current(row, cfg):

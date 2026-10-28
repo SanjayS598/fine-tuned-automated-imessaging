@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbox · Your messages, your voice</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Inbox home"><span class="brand-icon">↗</span><strong>inbox<span class="brand-dot">.</span></strong><span class="brand-caption">YOUR MESSAGES, YOUR VOICE</span></a>
+      <div class="top-actions"><span class="local-pill"><span class="status-dot"></span>On this Mac</span><button class="plain-button" id="activity-open">Activity <span>↗</span></button><button class="plain-button" id="setup-open">Setup <span>⚙</span></button><span class="account-avatar" title="Your account">You</span></div>
+    </header>
+    <div class="workspace-bar"><div><span class="eyebrow">PERSONAL WORKSPACE</span><div class="workspace-title">A little more you. <span>A little less typing.</span></div></div><div class="master-control"><div><strong id="master-label">Auto replies paused</strong><small id="master-detail">You're in control.</small></div><button class="switch" id="master-toggle" role="switch" aria-checked="false" aria-label="Enable automatic replies"><span></span></button></div></div>
+    <main class="workspace">
+      <aside class="conversation-panel">
+        <div class="list-heading"><h1>Messages <span id="chat-count">—</span></h1><button class="icon-button" id="refresh" aria-label="Refresh inbox">↻</button></div>
+        <label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="Search conversations" autocomplete="off" aria-label="Search conversations"><kbd>⌘ K</kbd></label>
+        <div class="filters" role="tablist" aria-label="Conversation filter"><button class="filter active" data-filter="all" role="tab" aria-selected="true">All messages</button><button class="filter" data-filter="auto" role="tab" aria-selected="false">Auto replies</button><button class="filter" data-filter="unread" role="tab" aria-selected="false">Unread</button></div>
+        <div class="conversation-list" id="chat-list" aria-label="Conversations"><div class="loading-state">Connecting to Messages…</div></div>
+        <div class="sidebar-footer"><span class="status-dot" id="connection-dot"></span><span id="connection-label">Connecting</span><span id="number-label"></span></div>
+      </aside>
+      <section class="thread-panel" id="thread-panel" aria-label="Conversation">
+        <div class="thread-empty" id="thread-empty"><span class="empty-art">↗</span><h2>Your conversations, all here.</h2><p>Choose a chat to read your messages<br>and make replies feel like you.</p><span class="small-label">PRIVATE · LOCAL · YOURS</span></div>
+        <div class="thread-content hidden" id="thread-content">
+          <header class="thread-heading"><button class="icon-button mobile-back" id="mobile-back" aria-label="Back to conversations">‹</button><span class="avatar" id="thread-avatar"></span><div class="thread-person"><h2 id="thread-title"></h2><p id="thread-meta"></p></div><span class="service-badge" id="thread-service"></span><button class="icon-button" id="details-toggle" aria-label="Show reply settings">☷</button></header>
+          <div class="message-scroll" id="message-scroll"><button class="older-button hidden" id="load-older">↑ Load earlier messages</button><div id="messages"></div><div id="message-end"></div></div>
+          <footer class="thread-footer"><span class="mini-spark">✦</span><p id="thread-footer-text">Your history stays on this Mac. Set up auto replies on the right.</p><span class="footer-lock">LOCAL & PRIVATE</span></footer>
+        </div>
+      </section>
+      <aside class="settings-panel" id="settings-panel">
+        <div class="settings-head"><button class="icon-button settings-dismiss" id="settings-close" aria-label="Close reply settings">×</button><span class="eyebrow">MAKE IT YOURS</span><h2>Reply settings</h2><p>A different conversation.<br>A different side of you.</p></div>
+        <div id="chat-settings-empty" class="settings-empty">Select a conversation to customize its replies.</div>
+        <div id="chat-settings" class="hidden">
+          <div class="auto-card"><div class="auto-card-title"><span class="spark-icon">✦</span><strong>Auto reply</strong><button class="switch" id="chat-toggle" role="switch" aria-checked="false" aria-label="Enable auto replies for this chat"><span></span></button></div><p id="chat-toggle-description">Let your model handle replies in this conversation.</p><span class="enabled-label" id="chat-enabled-label">OFF FOR THIS CHAT</span></div>
+          <div class="instructions-heading"><label for="instructions">A little direction</label><span>✎</span></div><p class="field-description">Extra instructions just for this chat. Your model will keep these in mind.</p>
+          <textarea id="instructions" maxlength="4000" placeholder="e.g. Keep it casual and short. Use lowercase. Don't make plans without checking with me first."></textarea>
+          <div class="instructions-footer"><span id="save-status">Only applies to this chat</span><span id="char-count">0 / 4,000</span></div>
+          <button class="primary-button save-button" id="save-instructions">Save instructions <span>↗</span></button>
+          <div class="note-card"><span>↳</span><div><strong>Your voice comes first.</strong><p>These instructions guide the reply. Your trained model brings your writing style.</p></div></div>
+        </div>
+        <div class="mode-card"><div><span class="eyebrow">REPLY MODE</span><button class="info-button" id="mode-info" aria-label="About reply modes">ⓘ</button></div><div class="mode-options"><button id="mode-preview" class="active">Preview</button><button id="mode-live">Send automatically</button></div><p id="mode-description">Try it out. Replies are saved to Activity without sending a message.</p></div>
+        <div class="model-card"><div><span class="model-icon">◈</span><strong>Your personal model</strong><span class="model-state" id="model-state">Checking</span></div><p id="model-description">Learning the way you write.</p><button id="model-setup" class="text-button">View setup <span>→</span></button></div>
+      </aside>
+    </main>
+  </div>
+  <div class="toast hidden" id="toast" role="status"></div>
+  <dialog id="setup-dialog"><div class="dialog-header"><div><span class="eyebrow">GET COMFORTABLE</span><h2>Your workspace setup</h2></div><button class="icon-button dialog-close" aria-label="Close setup">×</button></div><div class="setup-content"><section class="setup-step"><span class="step-number">01</span><div><h3>Your Messages connection</h3><p id="setup-connection">Checking access…</p></div><span id="setup-connection-badge" class="setup-badge"></span></section><section class="setup-step"><span class="step-number">02</span><div><h3>Your sending number</h3><p>In Messages → Settings → iMessage, select this number under “Start new conversations from”. For SMS, enable iPhone Text Message Forwarding.</p><label class="confirm-number"><input type="checkbox" id="verify-check"><span>I checked Messages and confirmed <strong id="verify-number"></strong></span></label><button class="secondary-button" id="verify-save">Confirm number</button></div></section><section class="setup-step"><span class="step-number">03</span><div><h3>A model that sounds like you</h3><p id="training-description">Train locally on your outgoing messages in direct conversations. Your history stays on this Mac.</p><div id="training-progress" class="training-progress hidden"><span></span></div><button class="primary-button" id="train-start">Train my model <span>↗</span></button><p class="setup-fineprint">Uses the Mac's built-in GPU. Keep the app open while training.</p></div></section></div><div class="dialog-bottom">Once your model is ready, select chats and turn on replies. Start in preview mode.</div></dialog>
+  <dialog id="activity-dialog"><div class="dialog-header"><div><span class="eyebrow">A LITTLE HELP BEHIND THE SCENES</span><h2>Reply activity</h2></div><button class="icon-button dialog-close" aria-label="Close activity">×</button></div><div id="activity-list" class="activity-list"></div></dialog>
+</body>
+</html>

@@ -9,6 +9,48 @@ It starts **paused, in preview mode, with an empty contact allowlist**.
 An always-running worker watches only new incoming messages. You control which
 contacts it can reply to and whether it saves previews or sends replies.
 
+## Open your inbox
+
+After installing dependencies and initializing your number below, double-click
+**`start.command`** in Finder, or run:
+
+```sh
+./start.command
+# Alternatively:
+uv run --extra mac imessage-bot ui
+```
+
+The app runs at `http://127.0.0.1:8765` on your Mac. The launcher opens a private
+browser session automatically; use it again if the server restarts. Keep its
+terminal open. The inbox includes every conversation in your Mac's Messages
+database, including group chats and RCS. Search conversations, load earlier
+messages, and view available attachments. Missing or iCloud-only attachment
+files cannot be displayed; attachment previews are limited to 40 MB.
+
+Select a chat to:
+
+- Toggle **Auto reply** for that exact conversation.
+- Add **A little direction** instructions, then click **Save instructions**.
+- Choose **Preview** or **Send automatically**, and use the top master switch
+  to enable or pause replies across all selected chats.
+- Inspect generated previews and delivery attempts in **Activity**.
+
+**Setup** shows the Messages connection, lets you confirm your sending number,
+and starts local training. Training pauses replies and continues while you
+browse. Once trained, enabling the master switch starts the reply worker
+automatically. Closing the UI browser tab leaves the server and worker running;
+stopping the UI server pauses replies and stops the worker it started.
+
+Auto replies currently support direct iMessage and SMS conversations. Group
+chats and RCS are available to browse. Per-chat settings override the CLI's
+contact allowlist, so two conversations with the same contact can be controlled
+independently. Saved chat instructions are supplied to the model alongside
+the conversation, and never become global instructions for other chats.
+
+The UI binds only to loopback. Message APIs and attachments require a private
+session, and changes require same-origin requests. No conversations, phone
+numbers, or screenshots are published with the public repository.
+
 ## Hardware and accounts
 
 - An Apple Silicon Mac, macOS Messages signed in to your Apple Account, and Python 3.12 with [uv](https://docs.astral.sh/uv/).

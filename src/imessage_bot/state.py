@@ -2,7 +2,7 @@ import hashlib
 import sqlite3
 import time
 
-from .config import HOME, private_dir
+from . import config
 
 
 def digest(text):
@@ -11,8 +11,8 @@ def digest(text):
 
 class State:
     def __init__(self, path=None):
-        private_dir()
-        self.db = sqlite3.connect(path or HOME / "state.sqlite3", timeout=10)
+        config.private_dir()
+        self.db = sqlite3.connect(path or config.HOME / "state.sqlite3", timeout=10)
         self.db.row_factory = sqlite3.Row
         self.db.execute("""CREATE TABLE IF NOT EXISTS attempts (
             guid TEXT PRIMARY KEY, chat_id INTEGER, created REAL, status TEXT,

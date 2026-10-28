@@ -115,6 +115,29 @@ class BotTests(unittest.TestCase):
         self.cfg['own_identities'].append('+12025550101')
         self.assertFalse(eligible(message(), self.cfg))
 
+    def test_per_chat_setting_overrides_contact_allowlist(self):
+        self.cfg['chat_settings'] = {'1':dict(enabled=False,instructions='')}
+        self.assertFalse(eligible(message(),self.cfg))
+        self.cfg['allowed_contacts'] = []
+        self.cfg['chat_settings']['1']['enabled'] = True
+        self.assertTrue(eligible(message(),self.cfg))
+        self.assertFalse(eligible(message(chat_id=2),self.cfg))
+
+    def test_per_chat_instructions_reach_model(self):
+        captured = []
+        self.cfg['chat_settings'] = {'1':dict(enabled=True,instructions='Use lowercase. Keep it short.')}
+        self.worker.tick()
+        class CaptureModel:
+            def __init__(self,cfg):
+                pass
+            def reply(self,turns,cfg):
+                captured.append(cfg['system_prompt'])
+                return 'okay'
+        self.worker.factory = CaptureModel
+        self.receive()
+        self.assertIn('Use lowercase. Keep it short.',captured[0])
+        self.assertEqual(self.cfg['system_prompt'],'test')
+
     def test_stale_message_is_skipped(self):
         self.receive(message(date=int((time.time()-APPLE_EPOCH-600)*1e9)))
         self.assertFalse(self.state.previews())

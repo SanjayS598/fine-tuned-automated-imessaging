@@ -78,9 +78,11 @@ def eligible(row, cfg):
         contact, sender = normalize(row["contact"] or ""), normalize(row["sender"] or "")
     except ValueError:
         return False
+    chat = cfg.get("chat_settings", {}).get(str(row["chat_id"]))
+    approved = chat["enabled"] if chat is not None else contact in cfg["allowed_contacts"]
     return (not row["is_from_me"] and clean(row) and row["participants"] == 1
             and row["style"] == 45 and row["service"] in ("iMessage", "SMS")
-            and contact == sender and contact in cfg["allowed_contacts"]
+            and contact == sender and approved
             and contact not in cfg["own_identities"] and bool(decode_text(row)))
 
 
