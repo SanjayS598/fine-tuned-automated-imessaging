@@ -32,6 +32,10 @@ class App:
         self.process_lock = threading.Lock()
         self.cache_lock = threading.Lock()
         self.cached_chats, self.cached_at = [], 0
+        self.preview_lock=threading.Lock()
+        self.preview_job=dict(stage='idle')
+        self.preview_model=None
+        self.preview_model_key=None
 
     @property
     def origin(self):
@@ -66,7 +70,7 @@ class App:
 
     @staticmethod
     def chat_settings(chat,cfg):
-        fallback = any(config.normalize(x) in cfg["allowed_contacts"] for x in chat["participants"] if "@" in x or any(c.isdigit() for c in x)) if supports_replies(chat,cfg) else False
+        fallback = any(config.normalize(x) in cfg["allowed_contacts"] for x in chat["participants"] if "@" in x or any(c.isdigit() for c in x)) if chat['style']==45 and supports_replies(chat,cfg) else False
         return cfg.get("chat_settings",{}).get(str(chat["id"]),dict(enabled=fallback,instructions=""))
 
     def chat(self,chat_id):
@@ -157,7 +161,7 @@ class App:
         if "enabled" in payload and type(payload["enabled"]) is not bool:
             raise ValueError("Enabled must be true or false.")
         if payload.get("enabled") and not chat["reply_supported"]:
-            raise ValueError("Auto replies support direct iMessage and SMS conversations.")
+            raise ValueError("This conversation has no supported Messages recipients.")
         if "instructions" in payload and (not isinstance(payload["instructions"],str) or len(payload["instructions"])>4000):
             raise ValueError("Instructions must be text, up to 4000 characters.")
         def edit(cfg):
@@ -166,6 +170,64 @@ class App:
             cfg["chat_settings"][str(chat_id)] = current
         self.mutate(edit)
         return self.chat(chat_id)
+
+    def preview_status(self,chat_id):
+        from .state import State
+        state=State()
+        try:
+            preview=next((dict(row) for row in state.previews(chat_id) if row['status'] in ('preview','manual_preview')),None)
+        finally:state.close()
+        job=dict(self.preview_job) if self.preview_job.get('chat_id')==chat_id else dict(stage='idle')
+        return dict(preview=preview,job=job)
+
+    def start_preview(self,chat_id):
+        cfg=config.load()
+        chat=self.chat(chat_id)
+        if not chat or not chat['reply_supported']:
+            raise ValueError('Choose a supported Messages conversation.')
+        if jobs.status().get('stage') in jobs.BUSY:
+            raise ValueError('Wait for training to finish before generating a preview.')
+        if not owner_adapter(cfg):
+            raise ValueError('An owner-only trained model is required.')
+        if not self.preview_lock.acquire(blocking=False):
+            raise ValueError('A preview is already generating. Please wait.')
+        self.preview_job=dict(stage='queued',chat_id=chat_id)
+        threading.Thread(target=self.generate_preview,args=(chat_id,cfg),daemon=True).start()
+        return dict(started=True,chat_id=chat_id)
+
+    def generate_preview(self,chat_id,cfg):
+        from .messages import Messages,eligible,conversation
+        from .model import Model,reply_config
+        from .state import State
+        state=None
+        try:
+            self.preview_job=dict(stage='generating',chat_id=chat_id)
+            source=Messages(cfg['db_path'])
+            row=source.latest_incoming(chat_id)
+            if not row:
+                raise ValueError('No received text is available to preview in this conversation.')
+            approved=dict(cfg,chat_settings=dict(cfg.get('chat_settings',{})))
+            approved['chat_settings'][str(chat_id)]=dict(enabled=True,instructions='')
+            if not eligible(row,approved):
+                raise ValueError('The latest received message cannot be previewed.')
+            turns=conversation(source.history_through(chat_id,row['rowid']),label_senders=row['style']==43)
+            key=(cfg['model'],cfg['adapter_path'])
+            if self.preview_model is None or self.preview_model_key!=key:
+                self.preview_model=Model(cfg)
+                self.preview_model_key=key
+            reply=self.preview_model.reply(turns,reply_config(cfg,chat_id,group=row['style']==43))
+            if not reply:
+                raise ValueError('The model returned no usable reply. Try generating again.')
+            state=State()
+            guid=state.save_manual_preview(row,reply)
+            self.preview_job=dict(stage='ready',chat_id=chat_id,guid=guid)
+        except Exception as exc:
+            error=str(exc) if isinstance(exc,ValueError) else f'Preview failed ({type(exc).__name__}). Check app.log.'
+            self.preview_job=dict(stage='failed',chat_id=chat_id,error=error)
+            logging.error('Manual preview failed (%s)',type(exc).__name__)
+        finally:
+            if state:state.close()
+            self.preview_lock.release()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -240,6 +302,8 @@ class Handler(BaseHTTPRequestHandler):
                 def cursor(key):
                     return int(params[key][0]) if key in params else None
                 self.respond(200,self.app.inbox().messages(chat_id,before=cursor("before"),after=cursor("after")))
+            elif url.path.startswith('/api/chats/') and url.path.endswith('/preview'):
+                self.respond(200,self.app.preview_status(int(url.path.split('/')[3])))
             elif url.path == "/api/activity":
                 from .state import State
                 state = State()
@@ -279,6 +343,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Expected an object.")
             if self.path == "/api/control":
                 self.respond(200,self.app.control(payload))
+            elif self.path.startswith('/api/chats/') and self.path.endswith('/preview'):
+                self.respond(202,self.app.start_preview(int(self.path.split('/')[3])))
             elif self.path.startswith("/api/chats/"):
                 self.respond(200,self.app.update_chat(int(self.path.rsplit("/",1)[1]),payload))
             elif self.path == "/api/train":

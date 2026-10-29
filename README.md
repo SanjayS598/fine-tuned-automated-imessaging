@@ -1,7 +1,7 @@
 # fine-tuned-automated-imessaging
 
 A local Mac bot that learns your texting style from your own outgoing messages
-and automatically replies in selected one-to-one Messages conversations.
+and automatically replies in selected direct and group Messages conversations.
 Built from the workflow in [devk03/imessage-finetuning](https://github.com/devk03/imessage-finetuning);
 see [NOTICE.md](NOTICE.md) and the preserved [original scripts](upstream/).
 
@@ -80,8 +80,9 @@ browse. Once trained, enabling the master switch starts the reply worker
 automatically. Closing the UI browser tab leaves the server and worker running;
 stopping the UI server pauses replies and stops the worker it started.
 
-Auto replies currently support direct iMessage and SMS conversations. Group
-chats and RCS are available to browse. Per-chat settings override the CLI's
+Auto replies support direct and group iMessage, SMS/MMS and RCS conversations
+using the services exposed by Messages on this Mac. Every group must be enabled
+individually; allowing a contact never enables their groups automatically. Per-chat settings override the CLI's
 contact allowlist, so two conversations with the same contact can be controlled
 independently. Saved chat instructions are supplied to the model alongside
 the conversation, and never become global instructions for other chats.
@@ -163,8 +164,9 @@ Mac need the same Apple Account. See [Apple's forwarding setup](https://support.
 The bot replies into existing chats through Messages, preserving their service.
 It cannot register a phone number or override Apple's sending account. Check an
 actual message on the receiving device to confirm the identity. AppleScript
-acceptance does not prove delivery. RCS automation is not supported here;
-only conversations whose database service is `iMessage` or `SMS` are eligible.
+acceptance does not prove delivery. The bot replies using the existing chat GUID
+for iMessage, SMS/MMS and RCS, including group chats; it never expands group
+recipients into separate direct messages.
 
 ## 3. Export your writing and train
 
@@ -232,6 +234,14 @@ uv run imessage-bot previews
 uv run imessage-bot off
 ```
 
+**Automatic previews only trigger on NEW incoming messages after enabling
+replies.** A chat toggle does not replay the historical inbox. Preview text now
+appears directly in the selected conversation and in Activity. Use **Preview
+latest message** to generate a draft for the latest received text immediately,
+even if it is old or replies are paused. Manual previews never send, never
+consume an incoming message for automatic replies, and do not count against
+automatic reply rate limits.
+
 Previews are saved locally and never sent. Changing settings discards pending
 replies. Starting or restarting the worker ignores the existing inbox, including
 messages received while it was stopped. Enabling after a pause also starts fresh.
@@ -259,7 +269,7 @@ Controls you can use at any time:
 | Ctrl-C in worker terminal | Stop worker and pause replies |
 
 The worker waits 8 seconds after the last incoming text to combine a burst.
-It skips messages older than 3 minutes, group chats, reactions, your own
+It skips messages older than 3 minutes, reactions, your own
 identities, and unapproved senders. It checks again after generation for manual
 replies, newer incoming messages, removed contacts, or a pause. Defaults limit
 it to one reply per contact chat per 30 seconds and 30 total attempts per hour.

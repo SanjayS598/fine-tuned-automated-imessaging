@@ -1,6 +1,7 @@
 import hashlib
 import sqlite3
 import time
+import uuid
 
 from . import config
 
@@ -23,9 +24,9 @@ class State:
         now = time.time() if now is None else now
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            recent = self.db.execute("SELECT count(*) FROM attempts WHERE created>?",
+            recent = self.db.execute("SELECT count(*) FROM attempts WHERE created>? AND status!='manual_preview'",
                                      (now - 3600,)).fetchone()[0]
-            last = self.db.execute("SELECT max(created) FROM attempts WHERE chat_id=?",
+            last = self.db.execute("SELECT max(created) FROM attempts WHERE chat_id=? AND status!='manual_preview'",
                                    (row["chat_id"],)).fetchone()[0]
             if recent >= cfg["max_per_hour"] or (last is not None and now-last < cfg["cooldown_seconds"]):
                 return False
@@ -43,8 +44,20 @@ class State:
         return self.db.execute("SELECT 1 FROM attempts WHERE chat_id=? AND reply_hash=? AND status IN ('sent','sending','failed')",
                                (chat_id, digest(text))).fetchone() is not None
 
-    def previews(self):
-        return self.db.execute("SELECT chat_id,created,status,reply,error FROM attempts ORDER BY created DESC LIMIT 20").fetchall()
+    def save_manual_preview(self,row,reply):
+        guid='manual-preview-'+uuid.uuid4().hex
+        with self.db:
+            self.db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?,?)',
+                            (guid,row['chat_id'],time.time(),'manual_preview',reply,digest(reply),None))
+        return guid
+
+    def previews(self,chat_id=None):
+        query='SELECT guid,chat_id,created,status,reply,error FROM attempts'
+        args=()
+        if chat_id is not None:
+            query+=' WHERE chat_id=?'
+            args=(chat_id,)
+        return self.db.execute(query+' ORDER BY created DESC LIMIT 20',args).fetchall()
 
     def close(self):
         self.db.close()

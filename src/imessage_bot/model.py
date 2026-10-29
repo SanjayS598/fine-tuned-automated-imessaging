@@ -3,6 +3,16 @@ from pathlib import Path
 from .policy import owner_adapter
 
 
+def reply_config(cfg,chat_id,group=False):
+    result=dict(cfg)
+    instructions=cfg.get('chat_settings',{}).get(str(chat_id),{}).get('instructions','').strip()
+    if instructions:
+        result['system_prompt']+="\n\nOwner's instructions for this conversation:\n"+instructions
+    if group:
+        result['system_prompt']+='\n\nThis is a group conversation. Incoming texts identify participants. Write one short reply to the group as the owner. Do not impersonate other participants or continue their dialogue.'
+    return result
+
+
 class Model:
     def __init__(self, cfg):
         if not owner_adapter(cfg):

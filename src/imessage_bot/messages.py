@@ -35,6 +35,8 @@ SELECT m.ROWID AS rowid, m.guid AS message_guid, m.text, m.attributedBody,
        m.is_from_me, m.date, m.associated_message_type, m.item_type,
        c.ROWID AS chat_id, c.guid AS chat_guid, c.service_name AS service,
        c.style, h.id AS sender,
+       (SELECT group_concat(hh.id,char(31)) FROM chat_handle_join ch JOIN handle hh ON hh.ROWID=ch.handle_id
+        WHERE ch.chat_id=c.ROWID) AS participant_ids,
        (SELECT count(*) FROM chat_handle_join ch WHERE ch.chat_id=c.ROWID) AS participants,
        (SELECT hh.id FROM chat_handle_join ch JOIN handle hh ON hh.ROWID=ch.handle_id
         WHERE ch.chat_id=c.ROWID LIMIT 1) AS contact
@@ -59,6 +61,13 @@ class Messages:
 
     def history(self, chat_id, limit=20):
         return list(reversed(self.query(SELECT + " WHERE c.ROWID=? ORDER BY m.ROWID DESC LIMIT ?", (chat_id, limit))))
+
+    def latest_incoming(self,chat_id):
+        rows=self.query(SELECT+" WHERE c.ROWID=? AND m.is_from_me=0 AND coalesce(m.associated_message_type,0)=0 AND coalesce(m.item_type,0)=0 ORDER BY m.ROWID DESC LIMIT 100",(chat_id,))
+        return next((row for row in rows if decode_text(row)),None)
+
+    def history_through(self,chat_id,rowid,limit=20):
+        return list(reversed(self.query(SELECT+" WHERE c.ROWID=? AND m.ROWID<=? ORDER BY m.ROWID DESC LIMIT ?",(chat_id,rowid,limit))))
 
     def chats(self):
         return self.query("""SELECT c.ROWID AS chat_id, c.service_name AS service,
@@ -92,19 +101,30 @@ class Messages:
 
 def eligible(row, cfg):
     try:
-        contact, sender = normalize(row["contact"] or ""), normalize(row["sender"] or "")
+        sender = normalize(row["sender"] or "")
     except ValueError:
         return False
+    if (row['is_from_me'] or not clean(row) or row['service'] not in ('iMessage','SMS','RCS')
+            or sender in cfg['own_identities'] or not decode_text(row)):
+        return False
     chat = cfg.get("chat_settings", {}).get(str(row["chat_id"]))
-    approved = chat["enabled"] if chat is not None else contact in cfg["allowed_contacts"]
-    return (not row["is_from_me"] and clean(row) and row["participants"] == 1
-            and row["style"] == 45 and row["service"] in ("iMessage", "SMS")
-            and contact == sender and approved
-            and contact not in cfg["own_identities"] and bool(decode_text(row)))
+    if row['style']==43:
+        members=[]
+        for value in (row.get('participant_ids') or '').split(chr(31)):
+            try:members.append(normalize(value))
+            except ValueError:continue
+        # Group consent is for the exact chat, never inferred from a member's
+        # contact allowlist. Every reply uses the existing group chat GUID.
+        return bool(chat and chat['enabled'] and sender in members and row['participants']>=1)
+    try:contact=normalize(row['contact'] or '')
+    except ValueError:return False
+    approved=chat['enabled'] if chat is not None else contact in cfg['allowed_contacts']
+    return row['style']==45 and row['participants']==1 and contact==sender and approved and contact not in cfg['own_identities']
 
 
-def conversation(rows, max_chars=6000, keep_leading=False):
+def conversation(rows, max_chars=6000, keep_leading=False,label_senders=False):
     turns = []
+    speakers={}
     for row in rows:
         if not clean(row):
             continue
@@ -112,6 +132,10 @@ def conversation(rows, max_chars=6000, keep_leading=False):
         if not text:
             continue
         role = "assistant" if row["is_from_me"] else "user"
+        if label_senders and role=='user':
+            sender=row.get('sender') or 'unknown'
+            speakers.setdefault(sender,len(speakers)+1)
+            text=f'Participant {speakers[sender]}: {text}'
         if turns and turns[-1]["role"] == role:
             turns[-1]["content"] = turns[-1]["content"] + "\n" + text
             if max_chars:

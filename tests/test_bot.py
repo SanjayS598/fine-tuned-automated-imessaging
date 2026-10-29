@@ -109,11 +109,43 @@ class BotTests(unittest.TestCase):
 
     def test_allowlist_group_and_self_filter(self):
         for changes in ({'sender':'+12025550102'}, {'participants':2},
-                        {'style':43}, {'is_from_me':1}, {'service':'RCS'},
+                        {'style':43}, {'is_from_me':1}, {'service':'unknown'},
                         {'associated_message_type':2000}, {'text':None}, {'item_type':1}):
             self.assertFalse(eligible(message(**changes), self.cfg), changes)
         self.cfg['own_identities'].append('+12025550101')
         self.assertFalse(eligible(message(), self.cfg))
+
+    def test_group_requires_explicit_chat_permission_and_valid_member(self):
+        row=message(style=43,participants=2,participant_ids='+12025550101\x1f+12025550102',sender='+12025550102')
+        self.assertFalse(eligible(row,self.cfg))
+        self.cfg['chat_settings']={'1':dict(enabled=True,instructions='')}
+        self.assertTrue(eligible(row,self.cfg))
+        self.assertFalse(eligible(dict(row,sender='+12025550103'),self.cfg))
+        self.assertFalse(eligible(dict(row,is_from_me=1),self.cfg))
+        self.assertFalse(eligible(dict(row,chat_id=2),self.cfg))
+        self.cfg['own_identities'].append('+12025550102')
+        self.assertFalse(eligible(row,self.cfg))
+
+    def test_group_reply_preserves_exact_group_destination(self):
+        self.cfg.update(dry_run=False,chat_settings={'1':dict(enabled=True,instructions='')})
+        self.worker.tick()
+        self.receive(message(style=43,participants=2,participant_ids='+12025550101\x1f+12025550102',chat_guid='iMessage;+;group-guid'))
+        self.assertEqual(self.sent,[('iMessage;+;group-guid','sounds good')])
+
+    def test_incoming_reaction_does_not_discard_pending_text(self):
+        now=time.time()
+        self.source.rows.append(message())
+        self.worker.tick(now)
+        self.source.rows.append(message(2,associated_message_type=2000,text='Liked a message'))
+        self.worker.tick(now+4)
+        self.worker.tick(now+9)
+        self.assertEqual(len(self.state.previews()),1)
+
+    def test_manual_preview_does_not_consume_auto_reply_or_cooldown(self):
+        self.state.save_manual_preview(message(),'manual test')
+        self.cfg['max_per_hour']=1
+        self.assertTrue(self.state.reserve(message(),'automatic test',self.cfg))
+        self.assertEqual(len(self.state.previews()),2)
 
     def test_per_chat_setting_overrides_contact_allowlist(self):
         self.cfg['chat_settings'] = {'1':dict(enabled=False,instructions='')}

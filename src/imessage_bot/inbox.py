@@ -15,13 +15,14 @@ def unix_date(value):
 
 
 def supports_replies(chat, cfg):
-    if chat["style"] != 45 or len(chat["participants"]) != 1:
+    if chat['service'] not in ('iMessage','SMS','RCS') or chat['style'] not in (43,45):
         return False
-    try:
-        contact = normalize(chat["participants"][0])
-    except ValueError:
-        return False
-    return chat["service"] in ("iMessage", "SMS") and contact not in cfg["own_identities"]
+    members=[]
+    for value in chat['participants']:
+        try:members.append(normalize(value))
+        except ValueError:continue
+    others=[value for value in members if value not in cfg['own_identities']]
+    return bool(others) and (chat['style']==43 or len(chat['participants'])==1)
 
 
 class Inbox:

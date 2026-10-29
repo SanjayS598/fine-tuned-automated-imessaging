@@ -87,8 +87,8 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(len(data['chats']),3)
         by_id={x['id']:x for x in data['chats']}
         self.assertTrue(by_id[1]['reply_supported'])
-        self.assertFalse(by_id[2]['reply_supported'])
-        self.assertFalse(by_id[3]['reply_supported'])
+        self.assertTrue(by_id[2]['reply_supported'])
+        self.assertTrue(by_id[3]['reply_supported'])
 
     def test_synced_contacts_replace_numbers_but_preserve_addresses(self):
         from imessage_bot import contacts
@@ -140,9 +140,37 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(self.request('/api/chats/1',dict(enabled=False))[0],200)
         self.assertEqual(config.load()['chat_settings']['1']['instructions'],'Be brief.')
 
-    def test_groups_cannot_be_enabled(self):
-        self.assertEqual(self.request('/api/chats/2',dict(enabled=True))[0],400)
-        self.assertEqual(self.request('/api/chats/3',dict(enabled=True))[0],400)
+    def test_groups_and_rcs_can_be_enabled_independently(self):
+        self.assertEqual(self.request('/api/chats/2',dict(enabled=True))[0],200)
+        self.assertEqual(self.request('/api/chats/3',dict(enabled=True))[0],200)
+        self.assertNotIn('1',config.load()['chat_settings'])
+        self.assertFalse(config.load()['enabled'])
+
+    def test_group_is_not_enabled_by_member_allowlist(self):
+        config.update(lambda c:c.update(allowed_contacts=['+12025550101']))
+        _,data,_=self.request('/api/chats')
+        by_id={x['id']:x for x in data['chats']}
+        self.assertTrue(by_id[1]['auto_reply'])
+        self.assertFalse(by_id[2]['auto_reply'])
+
+    def test_historical_manual_preview_cannot_send_and_keeps_config(self):
+        class FakeModel:
+            def __init__(self,cfg):pass
+            def reply(self,turns,cfg):return 'preview reply'
+        before=config.load()
+        with patch('imessage_bot.web.owner_adapter',return_value=True),patch('imessage_bot.model.Model',FakeModel),patch('imessage_bot.transport.send') as send:
+            status,_,_=self.request('/api/chats/1/preview',{})
+            self.assertEqual(status,202)
+            import time
+            for _ in range(100):
+                if self.app.preview_job['stage'] in ('ready','failed'):break
+                time.sleep(.01)
+            self.assertEqual(self.app.preview_job['stage'],'ready')
+            _,data,_=self.request('/api/chats/1/preview')
+            self.assertEqual(data['preview']['reply'],'preview reply')
+            self.assertEqual(data['preview']['status'],'manual_preview')
+            send.assert_not_called()
+        self.assertEqual(config.load(),before)
 
     def test_untrusted_origins_and_hosts_are_rejected(self):
         self.assertEqual(self.request('/api/chats/1',dict(enabled=True),origin=False)[0],403)

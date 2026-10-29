@@ -3,8 +3,8 @@ import logging
 import time
 
 from . import config
-from .messages import Messages, conversation, eligible
-from .model import Model
+from .messages import Messages, conversation, eligible,clean,decode_text
+from .model import Model,reply_config
 from .state import State
 from .transport import send
 
@@ -45,7 +45,8 @@ class Runner:
             raise ValueError("Verify the sending number before enabling live replies.")
         for row in self.messages.new(self.cursor):
             self.cursor = max(self.cursor, row["rowid"])
-            self.pending.pop(row["chat_id"], None)
+            if row['is_from_me']:
+                self.pending.pop(row['chat_id'],None)
             if eligible(row, cfg) and fresh(row, cfg, now):
                 self.pending[row["chat_id"]] = (row, now)
         for chat_id, (row, received) in list(self.pending.items()):
@@ -64,10 +65,13 @@ class Runner:
         if self.loader() != cfg or not cfg["enabled"]:
             return None
         history = self.messages.history(row["chat_id"])
-        if (not history or history[-1]["rowid"] != row["rowid"]
-                or not eligible(history[-1], cfg) or not fresh(history[-1], cfg, time.time())):
+        if any(item['is_from_me'] and item['rowid']>row['rowid'] for item in history):
             return None
-        return conversation(history)
+        text_rows=[item for item in history if clean(item) and decode_text(item)]
+        if (not text_rows or text_rows[-1]["rowid"] != row["rowid"]
+                or not eligible(text_rows[-1], cfg) or not fresh(text_rows[-1], cfg, time.time())):
+            return None
+        return conversation(history,label_senders=row['style']==43)
 
     def respond(self, row, cfg):
         turns = self.current(row, cfg)
@@ -77,10 +81,7 @@ class Runner:
         if self.model is None or key != self.model_key:
             self.model = self.factory(cfg)
             self.model_key = key
-        model_cfg = dict(cfg)
-        instructions = cfg.get("chat_settings", {}).get(str(row["chat_id"]), {}).get("instructions", "").strip()
-        if instructions:
-            model_cfg["system_prompt"] += "\n\nOwner's instructions for this conversation:\n" + instructions
+        model_cfg = reply_config(cfg,row['chat_id'],group=row['style']==43)
         reply = self.model.reply(turns, model_cfg)
         # Model loading/generation may take a while. Check stop switch, allowlist,
         # freshness and manual replies again immediately before reserving a send.

@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { chats: [], selected: null, messages: [], status: null, filter: 'all', query: '', hasMore: false, loading: false, dirty: false, request: 0 };
+const state = { chats: [], selected: null, messages: [], status: null, filter: 'all', query: '', hasMore: false, loading: false, dirty: false, request: 0, preview: null, previewJob: {}, lastActivity: null };
 let toastTimer;
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
@@ -105,6 +105,9 @@ async function selectChat(id) {
   state.dirty = false;
   state.selected = id;
   state.messages = [];
+  state.preview = null;
+  state.previewJob = {};
+  renderPreview();
   const request = ++state.request;
   renderChats(); renderSettings();
   $('thread-empty').classList.add('hidden');
@@ -124,6 +127,7 @@ async function selectChat(id) {
     state.messages = data.messages; state.hasMore = data.has_more;
     renderMessages();
     $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
+    await loadPreview();
   } catch (error) {
     if (request === state.request) $('messages').replaceChildren(element('div', 'loading-state', error.message));
   }
@@ -136,7 +140,7 @@ function renderSettings() {
   if (!chat) return;
   $('chat-toggle').setAttribute('aria-checked', String(chat.auto_reply));
   $('chat-toggle').disabled = !chat.reply_supported;
-  $('chat-toggle-description').textContent = chat.reply_supported ? 'Let your model handle replies in this conversation.' : 'You can browse this chat. Auto replies currently support direct iMessage and SMS chats.';
+  $('chat-toggle-description').textContent = chat.reply_supported ? (chat.style === 43 ? 'Reply to the whole group when a new message arrives. Each group is enabled separately.' : 'Let your model handle replies to new messages in this conversation.') : 'No supported Messages recipients were found for this conversation.';
   $('chat-enabled-label').textContent = chat.auto_reply ? 'ENABLED FOR THIS CHAT' : chat.reply_supported ? 'OFF FOR THIS CHAT' : 'BROWSE ONLY';
   $('chat-enabled-label').classList.toggle('enabled', chat.auto_reply);
   if (!state.dirty) {
@@ -144,7 +148,30 @@ function renderSettings() {
     $('char-count').textContent = `${chat.instructions.length.toLocaleString()} / 4,000`;
     $('save-status').textContent = 'Only applies to this chat';
   }
-  $('thread-footer-text').textContent = chat.auto_reply ? (state.status?.enabled ? `Auto replies enabled · ${state.status.mode === 'preview' ? 'Previewing without sending' : 'Replies will send automatically'}` : 'Auto replies selected for this chat. Turn on the master switch when you’re ready.') : 'Your history stays on this Mac. Set up auto replies on the right.';
+  $('thread-footer-text').textContent = chat.auto_reply ? (state.status?.enabled ? `Waiting for NEW incoming messages · ${state.status.mode === 'preview' ? 'Previews appear above and in Activity' : 'Replies will send automatically'}` : 'Auto replies selected for this chat. Turn on the master switch when you’re ready.') : 'Your history stays on this Mac. Set up auto replies on the right.';
+  renderPreview();
+}
+
+function renderPreview() {
+  const chat = selectedChat();
+  $('reply-preview').classList.toggle('hidden', !chat?.reply_supported);
+  const busy = ['queued', 'generating'].includes(state.previewJob.stage);
+  $('generate-preview').disabled = busy || !state.status?.trained || busyStages.includes(state.status?.training?.stage);
+  $('generate-preview').textContent = busy ? 'Generating on your Mac…' : 'Preview latest message';
+  $('preview-body').classList.toggle('hidden', !state.preview);
+  $('preview-body').textContent = state.preview?.reply || '';
+  $('preview-explanation').textContent = 'Automatic replies only trigger on new incoming messages after they are enabled.';
+  $('preview-status').textContent = busy ? 'Loading your model and generating a preview. Nothing will be sent.' : state.previewJob.stage === 'failed' ? state.previewJob.error : state.preview ? `Generated ${new Date(state.preview.created * 1000).toLocaleString()} · Preview only, not sent.` : 'Preview the latest received message now, even if it arrived before you enabled replies.';
+}
+
+async function loadPreview() {
+  const id = state.selected, request = state.request;
+  if (!id || !selectedChat()?.reply_supported) return;
+  const result = await api(`/api/chats/${id}/preview`);
+  if (request !== state.request) return;
+  state.preview = result.preview;
+  state.previewJob = result.job;
+  renderPreview();
 }
 
 function renderMessages() {
@@ -251,6 +278,11 @@ async function refresh(initial = false) {
     if (inboxResult.status !== 'fulfilled') throw inboxResult.reason;
     state.chats = inboxResult.value.chats;
     renderStatus(); renderChats();
+    await loadPreview();
+    const activity = await api('/api/activity');
+    const newest = activity.activity[0]?.guid || null;
+    if (state.lastActivity !== null && newest && newest !== state.lastActivity && ['preview', 'manual_preview'].includes(activity.activity[0]?.status)) toast('New reply preview is ready. View it in the chat or Activity.');
+    state.lastActivity = newest || 'none';
     if (state.selected && !state.loading) {
       const request = state.request, id = state.selected;
       const latest = state.messages.at(-1)?.id;
@@ -310,6 +342,7 @@ $('search').addEventListener('input', event => { state.query = event.target.valu
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(x => { x.classList.toggle('active', x === button); x.setAttribute('aria-selected', String(x === button)); }); renderChats(); }));
 $('refresh').addEventListener('click', () => refresh());
 $('load-older').addEventListener('click', olderMessages);
+$('generate-preview').addEventListener('click', async () => { if (!state.selected) return; try { await api(`/api/chats/${state.selected}/preview`, {}); state.previewJob = { stage: 'queued' }; renderPreview(); toast('Generating a preview. No message will be sent.'); setTimeout(() => loadPreview().catch(error => toast(error.message, true)), 1000); } catch (error) { toast(error.message, true); } });
 $('master-toggle').addEventListener('click', async () => { if (!state.status) return; $('master-toggle').disabled = true; const enabled = !state.status.enabled; if (await mutateControl({ enabled })) toast(enabled ? 'Replies enabled for your selected chats.' : 'All automatic replies paused.'); $('master-toggle').disabled = false; });
 $('chat-toggle').addEventListener('click', async () => { const chat = selectedChat(); if (!chat) return; $('chat-toggle').disabled = true; if (await updateChat({ enabled: !chat.auto_reply })) toast(chat.auto_reply ? 'Auto replies turned off for this chat.' : 'Chat enabled. The master switch controls when replies run.'); $('chat-toggle').disabled = !selectedChat()?.reply_supported; });
 $('instructions').addEventListener('input', () => { state.dirty = true; $('save-status').textContent = 'Unsaved changes'; $('char-count').textContent = `${$('instructions').value.length.toLocaleString()} / 4,000`; });
