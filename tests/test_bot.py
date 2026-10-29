@@ -249,6 +249,15 @@ class BotTests(unittest.TestCase):
         self.cfg['max_per_hour'] = 1
         self.assertFalse(self.state.reserve(message(3,chat_id=2), 'c', self.cfg, 1100))
 
+    def test_zero_cooldown_answers_consecutive_messages_once(self):
+        self.cfg.update(cooldown_seconds=0,dry_run=False)
+        self.worker.tick()
+        self.receive(message(1,text='what time should we go?'))
+        self.receive(message(2,text='lets do earlier'))
+        self.assertEqual(len(self.sent),2)
+        self.assertEqual(len(self.state.previews()),2)
+        self.assertFalse(self.state.reserve(message(2),'duplicate',self.cfg))
+
     def test_send_failure_is_not_retried(self):
         self.cfg['dry_run'] = False
         self.worker.tick()
@@ -352,6 +361,7 @@ class BotTests(unittest.TestCase):
         self.assertFalse(cfg['enabled'])
         self.assertTrue(cfg['dry_run'])
         self.assertEqual(cfg['allowed_contacts'],[])
+        self.assertEqual(cfg['cooldown_seconds'],0)
         self.assertEqual((self.home/'config.json').stat().st_mode & 0o777,0o600)
 
     def test_invalid_settings_fail_closed(self):

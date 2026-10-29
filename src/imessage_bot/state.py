@@ -31,7 +31,7 @@ class State:
                                      (now - 3600,)).fetchone()[0]
             last = self.db.execute("SELECT max(created) FROM attempts WHERE chat_id=? AND guid NOT LIKE 'manual-%'",
                                    (row["chat_id"],)).fetchone()[0]
-            if recent >= cfg["max_per_hour"] or (last is not None and now-last < cfg["cooldown_seconds"]):
+            if recent >= cfg["max_per_hour"] or (cfg["cooldown_seconds"]>0 and last is not None and now-last < cfg["cooldown_seconds"]):
                 self.last_block_reason='Hourly reply limit reached' if recent>=cfg['max_per_hour'] else 'Waiting for the per-chat reply cooldown'
                 return False
             cur = self.db.execute("INSERT OR IGNORE INTO attempts VALUES (?,?,?,?,?,?,?)",

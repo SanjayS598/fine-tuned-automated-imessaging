@@ -48,9 +48,13 @@ def load():
     cfg = json.loads((HOME / "config.json").read_text())
     if any(type(cfg.get(key)) is not bool for key in ("enabled", "dry_run", "sender_verified")):
         raise ValueError("Invalid enabled/dry_run settings; refusing to run.")
-    for key in ("poll_seconds", "debounce_seconds", "max_age_seconds", "cooldown_seconds", "max_per_hour"):
+    for key in ("poll_seconds", "debounce_seconds", "max_age_seconds", "max_per_hour"):
         if not isinstance(cfg.get(key), (int, float)) or cfg[key] <= 0:
             raise ValueError(f"Invalid {key}; expected a positive number.")
+    cooldown=cfg.get('cooldown_seconds',0)
+    if type(cooldown) not in (int,float) or not 0 <= cooldown < float('inf'):
+        raise ValueError('Invalid cooldown_seconds; expected a nonnegative number.')
+    cfg['cooldown_seconds']=cooldown
     cfg["allowed_contacts"] = [normalize(x) for x in cfg["allowed_contacts"]]
     cfg["own_identities"] = [normalize(x) for x in cfg["own_identities"]]
     cfg.setdefault("chat_settings", {})
@@ -90,4 +94,4 @@ def initialize(number):
                   db_path=str(Path.home() / "Library/Messages/chat.db"),
                   model=MODEL, adapter_path=str(HOME / "adapters"),
                   poll_seconds=3, debounce_seconds=8, max_age_seconds=180,
-                  cooldown_seconds=30, max_per_hour=30, system_prompt=SYSTEM))
+                  cooldown_seconds=0, max_per_hour=30, system_prompt=SYSTEM))

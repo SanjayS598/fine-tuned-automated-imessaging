@@ -98,6 +98,9 @@ numbers, or screenshots are published with the public repository.
 
 ## Conversation context and reply delivery
 
+The per-chat reply cooldown is disabled by default (`cooldown_seconds: 0`).
+The 8-second message-burst wait still combines consecutive incoming texts.
+
 Reply generation reads up to **120 recent messages** from the selected chat,
 with timestamps and group speaker labels, within an **8,192-token input budget**.
 Older context is trimmed first while retaining the latest question. Leading
