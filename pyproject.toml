@@ -7,7 +7,11 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-mac = ["mlx-lm[train]>=0.28.4,<0.32", "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'"]
+mac = [
+    "mlx-lm[train]>=0.28.4,<0.32",
+    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-contacts>=10",
+]
 
 [project.scripts]
 imessage-bot = "imessage_bot.cli:main"

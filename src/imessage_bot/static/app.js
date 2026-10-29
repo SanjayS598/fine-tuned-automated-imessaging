@@ -3,6 +3,36 @@ const state = { chats: [], selected: null, messages: [], status: null, filter: '
 let toastTimer;
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+const busyStages = ['exporting', 'preparing', 'training', 'validating'];
+
+function duration(seconds) {
+  if (seconds == null || !Number.isFinite(seconds)) return 'Estimating…';
+  const minutes = Math.ceil(Math.max(0, seconds) / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function renderTraining(training) {
+  const t = training || {};
+  const busy = busyStages.includes(t.stage);
+  $('training-banner').classList.toggle('hidden', !t.run_id);
+  document.body.classList.toggle('has-training-banner', !!t.run_id);
+  const titles = { exporting: 'Reading all your conversations', preparing: 'Preparing examples for your model', training: 'Learning your voice', validating: 'Checking the model', ready: 'Your new model is ready', failed: 'Training needs attention', interrupted: 'Training interrupted' };
+  $('training-stage-title').textContent = titles[t.stage] || 'Your personal model';
+  const percent = Math.max(0, Math.min(100, t.progress_percent || 0));
+  $('training-percent').textContent = `${percent.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  $('training-main-progress').value = percent;
+  $('training-progress').value = percent;
+  const metrics = [];
+  if (t.messages_scanned != null) metrics.push(`${t.messages_scanned.toLocaleString()} messages scanned`);
+  if (t.stage === 'exporting') metrics.push(`${(t.chats_processed || 0).toLocaleString()} / ${(t.chats_total || 0).toLocaleString()} conversations`);
+  if (t.steps_total) metrics.push(`${(t.steps_completed || 0).toLocaleString()} / ${t.steps_total.toLocaleString()} training steps`);
+  if (t.prepared_valid) metrics.push(`${t.prepared_valid.toLocaleString()} validation examples`);
+  if (busy && t.steps_completed) metrics.push(`~${duration(t.eta_seconds)} remaining`);
+  if (t.elapsed_seconds) metrics.push(`${duration(t.elapsed_seconds)} elapsed`);
+  $('training-metrics').replaceChildren(...metrics.map(text => element('span', '', text)));
+  $('training-scope').textContent = t.error || (t.steps_total ? `One full pass through every training example. ${t.excluded_messages?.toLocaleString() || 0} reactions, system entries and non-text messages excluded. Incoming messages provide context; only your replies are training targets.` : 'All conversations, including iMessage, SMS, RCS and groups. No message history leaves this Mac.');
+  return busy;
+}
 
 async function api(path, body) {
   const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
@@ -180,9 +210,9 @@ function renderStatus() {
   $('mode-live').classList.toggle('active', data.mode === 'live');
   $('mode-description').textContent = data.mode === 'preview' ? 'Try it out. Replies are saved to Activity without sending a message.' : 'Replies send through Messages to chats you enable. Change modes to pause.';
   const stage = data.training?.stage;
-  const busy = ['exporting', 'training'].includes(stage);
-  $('model-state').textContent = data.trained ? 'Ready' : busy ? 'Learning' : 'Not trained';
-  $('model-description').textContent = data.trained ? 'Trained on your messages. Ready to sound like you.' : busy ? (stage === 'exporting' ? 'Preparing your conversation history…' : 'Learning your writing style on this Mac…') : 'Train on your outgoing messages to get started.';
+  const busy = renderTraining(data.training);
+  $('model-state').textContent = busy ? 'Training' : data.trained ? 'Ready' : 'Not trained';
+  $('model-description').textContent = busy ? `${(data.training.progress_percent || 0).toFixed(2)}% of this stage · ${data.training.steps_total?.toLocaleString() || 'Preparing'} examples` : data.trained ? 'Trained on your messages. Ready to sound like you.' : 'Train on your outgoing messages to get started.';
   $('setup-connection').textContent = data.connected ? 'Your messages are connected and stay on this Mac.' : data.error;
   $('setup-connection-badge').textContent = data.connected ? 'Connected ✓' : 'Needs access';
   $('verify-number').textContent = data.number;
@@ -190,9 +220,13 @@ function renderStatus() {
   $('verify-save').textContent = data.sender_verified ? 'Number confirmed ✓' : 'Confirm number';
   $('verify-save').disabled = data.sender_verified;
   $('training-progress').classList.toggle('hidden', !busy);
-  $('train-start').disabled = busy || data.trained || !data.connected;
-  $('train-start').textContent = data.trained ? 'Your model is ready ✓' : busy ? 'Training in progress…' : 'Train my model ↗';
-  $('training-description').textContent = data.trained ? 'Your personal model is trained. Test a conversation in preview mode, then enable automatic sending when you’re happy with it.' : busy ? (stage === 'exporting' ? 'Preparing your direct conversations for training. This can take a few minutes.' : 'Training your personal model with the built-in GPU. You can keep browsing your inbox.') : data.training?.error || 'Train locally on your outgoing messages in direct conversations. Your history stays on this Mac.';
+  $('train-start').disabled = busy || !data.connected;
+  $('train-start').textContent = busy ? 'Training in progress…' : data.trained ? 'Train a new version ↗' : 'Train my model ↗';
+  $('training-description').textContent = busy ? `${data.training.steps_completed?.toLocaleString() || 0} / ${data.training.steps_total?.toLocaleString() || '…'} steps · ${data.training.progress_percent || 0}% of this stage. Your previous model is preserved until this run succeeds.` : data.training?.error || (data.trained ? 'Your model is ready. A new run covers all usable messages in iMessage, SMS, RCS and groups. Your current model is preserved until the new version finishes.' : 'Train locally on your outgoing messages across all conversations. Your history stays on this Mac.');
+  const contacts = data.contacts || {};
+  $('contacts-description').textContent = contacts.stage === 'connected' ? `${contacts.count.toLocaleString()} contacts synced${contacts.limited ? ' (limited access)' : ''}. Names appear automatically in your inbox. Contact data stays on this Mac.` : contacts.error || 'Connect macOS Contacts to show names beside your messages. Only names, phone numbers and email addresses are read.';
+  $('contacts-sync').textContent = contacts.stage === 'requesting' ? 'Waiting for macOS permission…' : contacts.stage === 'connected' ? 'Refresh contacts' : contacts.stage === 'permission_needed' ? 'Retry contacts access' : 'Connect contacts';
+  $('contacts-sync').disabled = contacts.stage === 'requesting';
   if (state.selected) renderSettings();
 }
 
@@ -273,6 +307,8 @@ document.querySelectorAll('.dialog-close').forEach(button => button.addEventList
 document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } }));
 $('verify-save').addEventListener('click', async () => { if (!$('verify-check').checked) return toast('Check your number in Messages, then tick the confirmation.', true); if (await mutateControl({ verified_number: state.status.number })) toast('Sending number confirmation saved.'); });
 $('train-start').addEventListener('click', async () => { $('train-start').disabled = true; try { await api('/api/train', {}); toast('Local training started. You can keep browsing.'); await refresh(); } catch (error) { toast(error.message, true); $('train-start').disabled = false; } });
+$('contacts-open').addEventListener('click', () => { renderStatus(); $('setup-dialog').showModal(); $('contacts-sync').focus(); });
+$('contacts-sync').addEventListener('click', async () => { $('contacts-sync').disabled = true; try { await api('/api/contacts/sync', {}); toast('Contacts sync started. Allow access if macOS asks.'); setTimeout(() => refresh(), 1500); } catch (error) { toast(error.message, true); $('contacts-sync').disabled = false; } });
 $('details-toggle').addEventListener('click', () => document.querySelector('.workspace').classList.toggle('show-settings'));
 $('settings-close').addEventListener('click', () => document.querySelector('.workspace').classList.remove('show-settings'));
 $('mobile-back').addEventListener('click', () => document.querySelector('.workspace').classList.remove('thread-open', 'show-settings'));

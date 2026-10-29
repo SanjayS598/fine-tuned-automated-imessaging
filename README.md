@@ -51,6 +51,24 @@ The UI binds only to loopback. Message APIs and attachments require a private
 session, and changes require same-origin requests. No conversations, phone
 numbers, or screenshots are published with the public repository.
 
+## Training progress and Contacts
+
+The main inbox shows real training progress: export coverage, preparation stage,
+completed/total optimizer steps, percentage of the current stage, elapsed time,
+and an estimated remaining time. Estimates update from MLX reports and can vary
+with conversation length. Reactions, system events and attachment-only messages
+are counted but excluded from text training. Incoming text provides context;
+your outgoing text supplies the assistant targets. Messages without chat links
+are also scanned, with standalone owner messages using neutral context.
+
+Use **Contacts → Connect contacts** to import names from macOS Contacts. Grant
+the app hosting Inbox access under **System Settings → Privacy & Security →
+Contacts** if needed, then retry. Names match normalized phone numbers and email
+addresses. Only names and addresses are cached, in ignored `.local/contacts.json`.
+Contact names are used for display and do not change the recipient identifiers
+or get added to training targets. Limited Contacts access shows only the names
+macOS permits. Use Refresh contacts after editing your address book.
+
 ## Hardware and accounts
 
 - An Apple Silicon Mac, macOS Messages signed in to your Apple Account, and Python 3.12 with [uv](https://docs.astral.sh/uv/).
@@ -105,7 +123,7 @@ only conversations whose database service is `iMessage` or `SMS` are eligible.
 
 ```sh
 uv run imessage-bot chats
-# Default: train on all direct iMessage/SMS chats, not group chats.
+# Default: all conversations, including groups and RCS.
 uv run imessage-bot export
 # Optional: restrict training to selected contacts (repeat --contact).
 # uv run imessage-bot export --contact +12025550101
@@ -123,8 +141,9 @@ attributed text is decoded with macOS Foundation when possible. Unsupported
 content is skipped rather than guessed.
 
 Before training, examples are checked against the real tokenizer's 1024-token
-budget. Older context pairs are removed first; examples that still exceed the
-budget are skipped so the assistant target is never truncated away.
+budget. Older context pairs are removed first. Long replies are split into bounded
+targets with recent incoming context, preserving their text instead of dropping
+them. Outbound-first sessions receive a neutral conversation prompt.
 
 Review `.local/data/` and try the local chat before enabling live replies.
 Fine-tuning aims to learn style; it cannot guarantee accurate facts or a perfect
@@ -132,8 +151,12 @@ imitation. Generated bot replies are tracked and sessions containing their
 matching outgoing text are excluded from future exports. This filtering only
 covers sends recorded by this bot installation.
 
-To train a replacement without overwriting your current model, set a different
-`adapter_path` in `.local/config.json`, turn replies off, and train again.
+The GUI trains a new version in `.local/runs/<run-id>/` and preserves your
+current model until the new run completes successfully. Each GUI run makes one
+full pass through every prepared training example (batch size one); about 10%
+of conversation sessions are held out for validation. The original 200-step CLI
+command above is a short smoke run, not a full training pass. To train a manual
+replacement, set a different `adapter_path` while paused and train again.
 Changing the base `model` also requires a matching adapter. Restart the worker
 after changing model files or database paths.
 

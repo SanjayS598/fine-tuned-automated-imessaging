@@ -90,6 +90,30 @@ class InboxTests(unittest.TestCase):
         self.assertFalse(by_id[2]['reply_supported'])
         self.assertFalse(by_id[3]['reply_supported'])
 
+    def test_synced_contacts_replace_numbers_but_preserve_addresses(self):
+        from imessage_bot import contacts
+        contacts.save(stage='connected',count=1,index={'+12025550101':'Sample Person'})
+        _,data,_=self.request('/api/chats')
+        chat=next(x for x in data['chats'] if x['id']==1)
+        self.assertEqual(chat['title'],'Sample Person')
+        self.assertEqual(chat['participants'],['+12025550101'])
+        _,status,_=self.request('/api/status')
+        self.assertNotIn('index',status['contacts'])
+
+    def test_training_source_includes_group_and_rcs_chats(self):
+        from imessage_bot.messages import Messages
+        with sqlite3.connect(self.path) as db:
+            db.execute('INSERT INTO chat_message_join VALUES (2,1),(3,2)')
+        source=Messages(self.path)
+        self.assertEqual({x['chat_id'] for x in source.training_chats()},{1,2,3})
+        self.assertEqual(source.orphan_history(),[])
+
+    def test_training_blocks_enabling_replies(self):
+        with patch('imessage_bot.web.jobs.status',return_value=dict(stage='training')):
+            status,data,_=self.request('/api/control',dict(enabled=True))
+        self.assertEqual(status,400)
+        self.assertIn('training',data['error'])
+
     def test_message_pagination_has_no_gaps(self):
         inbox=Inbox(self.path)
         recent=inbox.messages(1)

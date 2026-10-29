@@ -72,6 +72,19 @@ class Messages:
     def all_history(self, chat_id):
         return self.query(SELECT + " WHERE c.ROWID=? ORDER BY m.date,m.ROWID", (chat_id,))
 
+    def training_chats(self):
+        return self.query("""SELECT c.ROWID AS chat_id,c.service_name AS service,
+            (SELECT h.id FROM chat_handle_join j JOIN handle h ON h.ROWID=j.handle_id
+             WHERE j.chat_id=c.ROWID LIMIT 1) AS contact
+            FROM chat c WHERE EXISTS(SELECT 1 FROM chat_message_join j WHERE j.chat_id=c.ROWID)
+            ORDER BY c.ROWID""")
+
+    def orphan_history(self):
+        return self.query("""SELECT m.ROWID AS rowid,m.guid AS message_guid,m.text,m.attributedBody,
+            m.is_from_me,m.date,m.associated_message_type,m.item_type,0 AS chat_id
+            FROM message m WHERE NOT EXISTS(SELECT 1 FROM chat_message_join j WHERE j.message_id=m.ROWID)
+            ORDER BY m.date,m.ROWID""")
+
 
 def eligible(row, cfg):
     try:
@@ -86,7 +99,7 @@ def eligible(row, cfg):
             and contact not in cfg["own_identities"] and bool(decode_text(row)))
 
 
-def conversation(rows):
+def conversation(rows, max_chars=6000, keep_leading=False):
     turns = []
     for row in rows:
         if not clean(row):
@@ -96,9 +109,13 @@ def conversation(rows):
             continue
         role = "assistant" if row["is_from_me"] else "user"
         if turns and turns[-1]["role"] == role:
-            turns[-1]["content"] = (turns[-1]["content"] + "\n" + text)[-6000:]
+            turns[-1]["content"] = turns[-1]["content"] + "\n" + text
+            if max_chars:
+                turns[-1]["content"] = turns[-1]["content"][-max_chars:]
         else:
-            turns.append(dict(role=role, content=text[-6000:]))
+            turns.append(dict(role=role, content=text[-max_chars:] if max_chars else text))
+    if keep_leading and turns and turns[0]["role"] == "assistant":
+        turns.insert(0, dict(role="user", content="Continue the conversation."))
     while turns and turns[0]["role"] != "user":
         turns.pop(0)
     return turns

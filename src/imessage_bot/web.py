@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, jobs
+from . import config, jobs, contacts
 from .inbox import Inbox, supports_replies
 
 STATIC = Path(__file__).parent / "static"
@@ -27,6 +27,7 @@ class App:
         self.token = secrets.token_urlsafe(32)
         self.worker = None
         self.training = None
+        self.contacts_process = None
         self.process_lock = threading.Lock()
         self.cache_lock = threading.Lock()
         self.cached_chats, self.cached_at = [], 0
@@ -44,7 +45,21 @@ class App:
                 self.cached_chats = self.inbox().chats()
                 self.cached_at = time.monotonic()
             cfg = config.load()
-            return [dict(row, reply_supported=supports_replies(row,cfg),
+            names = contacts.snapshot().get('index',{})
+            def named(row):
+                participants=[]
+                for address in row['participants']:
+                    try:
+                        participants.append(names.get(config.normalize(address),address))
+                    except ValueError:
+                        participants.append(address)
+                title = row['title']
+                if row['style']==45 and len(participants)==1:
+                    title=participants[0]
+                elif title == ', '.join(row['participants']):
+                    title=', '.join(participants)
+                return dict(row,title=title,participant_names=participants)
+            return [dict(named(row), reply_supported=supports_replies(row,cfg),
                          auto_reply=self.chat_settings(row,cfg)["enabled"],
                          instructions=self.chat_settings(row,cfg)["instructions"]) for row in self.cached_chats]
 
@@ -94,7 +109,8 @@ class App:
         return dict(enabled=cfg["enabled"],mode="preview" if cfg["dry_run"] else "live",
                     number=cfg["own_identities"][0],sender_verified=cfg["sender_verified"],
                     connected=connected,error=error,trained=trained,worker_running=self.worker_running(),
-                    training=jobs.status(),model=cfg["model"])
+                    training=jobs.status(),model=cfg["model"],
+                    contacts={key:value for key,value in contacts.snapshot().items() if key!='index'})
 
     def control(self,payload):
         allowed = {"enabled","mode","verified_number"}
@@ -113,6 +129,8 @@ class App:
                 if type(payload["enabled"]) is not bool:
                     raise ValueError("Enabled must be true or false.")
                 if payload["enabled"]:
+                    if jobs.status().get("stage") in jobs.BUSY:
+                        raise ValueError("Replies stay paused while your model is training.")
                     if not (Path(cfg["adapter_path"])/"personal-model.json").is_file():
                         raise ValueError("Train your model before starting replies.")
                     if not cfg["dry_run"] and not cfg["sender_verified"]:
@@ -260,12 +278,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,self.app.update_chat(int(self.path.rsplit("/",1)[1]),payload))
             elif self.path == "/api/train":
                 with self.app.process_lock:
-                    if jobs.status().get("stage") in ("exporting","training") or (self.app.training and self.app.training.poll() is None):
+                    if jobs.status().get("stage") in jobs.BUSY or (self.app.training and self.app.training.poll() is None):
                         raise ValueError("Training is already running.")
-                    if self.app.status()["trained"]:
-                        raise ValueError("A trained model already exists. Choose a new adapter path to train a replacement.")
                     self.app.training = self.app.spawn("imessage_bot.jobs",log="training.log")
                 self.respond(202,{"started":True})
+            elif self.path == "/api/contacts/sync":
+                with self.app.process_lock:
+                    if self.app.contacts_process and self.app.contacts_process.poll() is None:
+                        raise ValueError('Contacts sync is already running.')
+                    self.app.contacts_process=self.app.spawn('imessage_bot.contacts','--request',log='contacts.log')
+                self.respond(202,{'started':True})
             else:
                 self.respond(404,{"error":"Not found."})
         except (ValueError,TypeError,KeyError) as exc:
