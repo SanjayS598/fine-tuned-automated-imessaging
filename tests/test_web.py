@@ -269,6 +269,25 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertEqual(body['activity'][0]['delivery']['state'],'delivered')
 
+    def test_local_summary_api_is_private_and_does_not_change_auto_settings(self):
+        from imessage_bot import summaries
+        before=config.load()
+        self.assertEqual(self.request('/api/chats/1/summary',auth=False)[0],401)
+        self.assertEqual(self.request('/api/chats/1/summary',{},origin=False)[0],403)
+        status,body,_=self.request('/api/chats/1/summary')
+        self.assertEqual(status,200)
+        self.assertTrue(body['summaries'][0]['stale'])
+        with patch.object(self.app,'spawn',return_value=types.SimpleNamespace(poll=lambda:0)) as spawn:
+            self.assertEqual(self.request('/api/chats/1/summary',{})[0],202)
+            self.assertEqual(spawn.call_args.args,('imessage_bot.summaries','1'))
+        rows=summaries.snapshot(self.app.inbox().source,1)
+        summaries.save(1,dict(chat_id=1,stage='ready',items=[],fingerprint=summaries.fingerprint(rows)))
+        status,body,_=self.request('/api/summaries')
+        self.assertEqual(status,200)
+        self.assertEqual(body['summaries'][0]['chat_id'],1)
+        self.assertFalse(body['summaries'][0]['stale'])
+        self.assertEqual(config.load(),before)
+
     def test_static_assets_have_private_browser_policy(self):
         status,body,headers=self.request('/')
         self.assertEqual(status,200)

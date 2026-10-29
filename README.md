@@ -342,3 +342,29 @@ uv run python -m unittest discover -s tests -v
 Core tests use synthetic conversations and require no Apple account, GPU, or
 access to personal messages. Real macOS permissions, trained-model quality,
 AppleScript delivery, and iPhone forwarding need testing on your own devices.
+
+## Local decision summaries
+
+Open **Decisions** in the top bar for a glass side panel with **This chat** and
+**Overview** tabs. A local LLM extracts agreed plans, your commitments,
+suggestions that are not yet agreed, and open questions. Each item includes the
+actual source messages; click a source to reveal it in the conversation. Bot
+replies are labeled when they contributed to a decision or proposal.
+
+The selected chat uses up to 120 recent text messages within an 8,192-token
+input budget per inference. Overlapping short exchanges keep the small local
+model focused; recent notes appear first, with progress while older exchanges
+are processed. Overview collects Auto chats and any chats you have summarized.
+While the panel is open, it checks for new messages and refreshes stale summaries;
+Refresh also lets you regenerate on demand. It is not an archive-wide audit.
+Summaries are generated in a separate local process so they do not share the
+reply model's inference thread, and cached privately under the app's data folder.
+They cannot send messages, enable Auto, or change per-chat instructions. Incoming
+texts used for summaries are never added to training. LLM summaries can still
+misinterpret a conversation; source messages remain available for verification.
+
+The `summary_model` config field can point to a separate local MLX model directory.
+This installation uses Qwen2.5-3B-Instruct in 4-bit MLX format for summaries;
+the trained texting model remains separate. If the field is omitted, summaries
+use the configured base model. Download model weights before using the packaged
+app, which runs offline. No conversations are sent to the model host.

@@ -106,6 +106,7 @@ async function selectChat(id) {
   if (state.dirty && !window.confirm('Leave this chat without saving your instructions?')) return;
   state.dirty = false;
   state.selected = id;
+  if (summaryState.open && summaryState.scope === 'chat') { summaryState.request++; $('summary-list').replaceChildren(element('p', 'summary-empty', 'Loading this chat’s summary…')); }
   state.messages = [];
   state.preview = null;
   state.previewJob = {};
@@ -133,6 +134,7 @@ async function selectChat(id) {
     renderMessages();
     $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
     await loadPreview();
+    loadSummaries();
   } catch (error) {
     if (request === state.request) $('messages').replaceChildren(element('div', 'loading-state', error.message));
   }
@@ -413,3 +415,77 @@ document.addEventListener('keydown', event => { if ((event.metaKey || event.ctrl
 window.addEventListener('beforeunload', event => { if (state.dirty) { event.preventDefault(); event.returnValue = ''; } });
 refresh(true);
 setInterval(() => { if (!document.hidden) refresh(); }, 6000);
+
+// Local summaries are independent of sending and never change chat permissions.
+const summaryState = { open: false, scope: 'chat', loading: false, request: 0 };
+function summaryPath() { return summaryState.scope === 'overview' ? '/api/summaries' : state.selected ? `/api/chats/${state.selected}/summary` : null; }
+async function showSummarySource(chatId, messageId) {
+  if (state.selected !== chatId) { await selectChat(chatId); if (state.selected !== chatId) return; }
+  for (let page = 0; page < 3 && state.hasMore && !state.messages.some(m => m.id === messageId); page++) await olderMessages();
+  const row = document.querySelector(`[data-message="${messageId}"]`);
+  if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('summary-highlight'); setTimeout(() => row.classList.remove('summary-highlight'), 3500); }
+  else toast('Source text is shown here; the message may no longer be available in the thread.');
+}
+function renderSummaries(data) {
+  const key = summaryPath() + JSON.stringify(data);
+  if (summaryState.lastRender === key) return;
+  summaryState.lastRender = key;
+  const openSources = new Set([...$('summary-list').querySelectorAll('details[open]')].map(d => d.closest('article').querySelector('p').textContent));
+  const scrollTop = $('summary-list').scrollTop;
+  const groups = data.summaries || [], fragment = document.createDocumentFragment();
+  const active = groups.some(s => s.stage === 'generating');
+  $('summary-refresh').disabled = data.busy || !summaryPath();
+  $('summary-refresh').textContent = data.busy ? 'Summarizing…' : 'Refresh ↻';
+  $('summary-status').textContent = active ? 'Reading recent messages with the local model…' : summaryState.scope === 'overview' ? data.scope : groups[0] ? `${groups[0].title} · Up to 120 recent messages` : 'Choose a conversation to summarize.';
+  for (const group of groups) {
+    const section = element('section', 'summary-group'); section.dataset.summaryChat = group.chat_id;
+    section.append(element('h3', '', group.title));
+    if (group.updated) section.append(element('small', '', `${group.stale ? 'Updating previous summary' : 'Updated ' + relativeDate(group.updated)} · ${group.messages_count} source messages`));
+    if (group.stage === 'generating' && group.chunks_total) section.append(element('small', '', `Reading recent exchanges: ${group.chunks_done} / ${group.chunks_total}`));
+    if (group.partial) section.append(element('small', '', 'Some exchanges could not be summarized. The supported notes are shown below.'));
+    if (group.stage === 'failed') section.append(element('p', 'summary-empty', group.error));
+    for (const item of group.items || []) {
+      const card = element('article', 'summary-card');
+      card.append(element('span', 'summary-kind', { agreed: 'Agreed plan', commitment: 'Your commitment', proposed: 'Suggestion · not agreed', open: 'Open question' }[item.kind] || 'Plan'), element('p', '', item.text));
+      if (item.bot_involved) card.append(element('small', 'summary-bot', 'Your bot was part of this exchange'));
+      const details = element('details'), label = element('summary', '', `Source messages (${item.evidence.length})`); details.append(label); details.open = openSources.has(item.text);
+      for (const source of item.evidence) {
+        const button = element('button', 'summary-source', `${source.bot ? 'You · bot reply' : source.owner ? 'You' : 'Received'}: “${source.text}”`);
+        button.addEventListener('click', () => showSummarySource(group.chat_id, source.id)); details.append(button);
+      }
+      card.append(details); section.append(card);
+    }
+    if (!(group.items || []).length && group.stage !== 'failed') section.append(element('p', 'summary-empty', group.stage === 'generating' ? 'Summarizing decisions and open plans…' : group.stage === 'ready' ? 'No decisions or unresolved plans found in these messages.' : 'Preparing a local summary…'));
+    fragment.append(section);
+  }
+  if (!groups.length) fragment.append(element('p', 'summary-empty', summaryState.scope === 'overview' ? 'Open a chat summary or enable an Auto chat to begin your overview.' : 'Select a conversation to see its decisions and plans.'));
+  $('summary-list').replaceChildren(fragment); $('summary-list').scrollTop = scrollTop;
+}
+async function loadSummaries(force = false) {
+  if (!summaryState.open || summaryState.loading) return;
+  const path = summaryPath(), request = ++summaryState.request;
+  if (!path) { renderSummaries({ summaries: [] }); return; }
+  summaryState.loading = true;
+  try {
+    let data = await api(path);
+    if (request !== summaryState.request || path !== summaryPath()) return;
+    renderSummaries(data);
+    const needsUpdate = data.summaries.some(s => s.stale && !['failed', 'generating'].includes(s.stage));
+    if (!data.busy && (force || needsUpdate) && !busyStages.includes(state.status?.training?.stage)) {
+      await api(path, {});
+      data = await api(path);
+      if (request === summaryState.request && path === summaryPath()) renderSummaries(data);
+    }
+  } catch (error) { if (path === summaryPath()) $('summary-status').textContent = error.message; }
+  finally { summaryState.loading = false; if (summaryState.open && path !== summaryPath()) loadSummaries(); }
+}
+$('summary-open').addEventListener('click', () => { summaryState.open = true; $('summary-panel').classList.remove('hidden'); loadSummaries(); });
+$('summary-close').addEventListener('click', () => { summaryState.open = false; summaryState.request++; $('summary-panel').classList.add('hidden'); });
+for (const scope of ['chat', 'overview']) $('summary-' + scope).addEventListener('click', () => {
+  summaryState.scope = scope; summaryState.request++;
+  for (const tab of ['chat', 'overview']) { $('summary-' + tab).classList.toggle('active', tab === scope); $('summary-' + tab).setAttribute('aria-selected', String(tab === scope)); }
+  summaryState.lastRender = null; $('summary-list').replaceChildren();
+  loadSummaries();
+});
+$('summary-refresh').addEventListener('click', () => loadSummaries(true));
+setInterval(() => { if (!document.hidden) loadSummaries(); }, 6000);

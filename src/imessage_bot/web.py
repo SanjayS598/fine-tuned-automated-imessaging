@@ -39,6 +39,9 @@ class App:
         self.preview_job=dict(stage='idle')
         self.preview_model=None
         self.preview_model_key=None
+        self.summary_process=None
+        self.summary_targets=[]
+        self.summary_lock=threading.Lock()
 
     @property
     def origin(self):
@@ -79,6 +82,40 @@ class App:
 
     def chat(self,chat_id):
         return next((c for c in self.chats() if c["id"] == chat_id),None)
+
+    def summary_ids(self):
+        from .summaries import cache_path
+        return [c['id'] for c in self.chats() if (c['auto_reply'] and c['reply_mode']=='auto') or cache_path(c['id']).exists()]
+
+    def summary_status(self,chat_id=None):
+        from . import summaries
+        ids=[chat_id] if chat_id is not None else self.summary_ids()
+        source=self.inbox().source
+        running=self.summary_process is not None and self.summary_process.poll() is None
+        result=[]
+        for ident in ids:
+            chat=self.chat(ident)
+            if not chat:raise ValueError('Conversation not found.')
+            data=summaries.read(ident)
+            stale=data.get('fingerprint')!=summaries.fingerprint(summaries.snapshot(source,ident))
+            stage=data.get('stage','empty')
+            if running and ident in self.summary_targets:stage='generating'
+            elif stage=='generating':stage='interrupted'
+            result.append(dict(data,chat_id=ident,title=chat['title'],stage=stage,stale=stale))
+        return dict(summaries=result,busy=running,scope='Auto chats and chats you have summarized; up to 120 recent messages per chat.')
+
+    def start_summary(self,chat_id=None):
+        if jobs.status().get('stage') in jobs.BUSY:
+            raise ValueError('Wait for training to finish before summarizing.')
+        ids=[chat_id] if chat_id is not None else self.summary_ids()
+        if not ids:raise ValueError('Select a chat to create its first summary.')
+        if any(self.chat(ident) is None for ident in ids):raise ValueError('Conversation not found.')
+        with self.summary_lock:
+            if self.summary_process is not None and self.summary_process.poll() is None:
+                return dict(started=False,busy=True)
+            self.summary_targets=ids
+            self.summary_process=self.spawn('imessage_bot.summaries',*(str(i) for i in ids),log='summaries.log')
+        return dict(started=True,chat_ids=ids)
 
     def mutate(self,edit):
         def revisioned(cfg):
@@ -375,6 +412,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,self.app.status())
             elif url.path == "/api/chats":
                 self.respond(200,{"chats":self.app.chats()})
+            elif url.path == '/api/summaries':
+                self.respond(200,self.app.summary_status())
+            elif url.path.startswith('/api/chats/') and url.path.endswith('/summary'):
+                self.respond(200,self.app.summary_status(int(url.path.split('/')[3])))
             elif url.path.startswith("/api/chats/") and url.path.endswith("/messages"):
                 chat_id = int(url.path.split("/")[3])
                 def cursor(key):
@@ -425,6 +466,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Expected an object.")
             if self.path == "/api/control":
                 self.respond(200,self.app.control(payload))
+            elif self.path == '/api/summaries':
+                self.respond(202,self.app.start_summary())
+            elif self.path.startswith('/api/chats/') and self.path.endswith('/summary'):
+                self.respond(202,self.app.start_summary(int(self.path.split('/')[3])))
             elif self.path.startswith('/api/chats/') and self.path.endswith('/preview'):
                 self.respond(202,self.app.start_preview(int(self.path.split('/')[3])))
             elif self.path.startswith('/api/chats/') and self.path.endswith('/send'):
@@ -480,3 +525,6 @@ def serve(port=8765,open_browser=True):
         if app.worker and app.worker.poll() is None:
             app.worker.terminate()
             app.worker.wait(timeout=10)
+        if app.summary_process and app.summary_process.poll() is None:
+            app.summary_process.terminate()
+            app.summary_process.wait(timeout=10)
