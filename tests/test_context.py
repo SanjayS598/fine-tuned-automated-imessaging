@@ -26,7 +26,7 @@ class ContextTests(unittest.TestCase):
         sampler=types.SimpleNamespace(make_sampler=lambda **k:None)
         with patch.dict('sys.modules',{'mlx_lm':fake,'mlx_lm.sample_utils':sampler}):
             result=model.reply([dict(role='user',content='meet at the north entrance'),dict(role='assistant',content='okay'),dict(role='user',content='which entrance?')],{})
-        self.assertEqual(result,'the north entrance')
+        self.assertEqual(result,'The north entrance')
         self.assertTrue(model.last_context['style_fallback'])
 
     def test_unknown_fact_cannot_borrow_a_time_from_message_metadata(self):

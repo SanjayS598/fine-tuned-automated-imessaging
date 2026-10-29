@@ -31,6 +31,7 @@ def context_prompt(tokenizer,turns,system,limit=CONTEXT_TOKENS):
 
 
 def inference_system(cfg):
+    from .texting import guidance
     now=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')
     result=('Write only a short text reply to the latest message. '
         'Use facts from the conversation. Answer the question directly. '
@@ -40,6 +41,7 @@ def inference_system(cfg):
         'Avoid generic acknowledgments when the message asks a question. Keep it casual and natural. '
         'Bracketed timestamps are context metadata; never include them in your reply. '
         f'Current local time: {now}. Dated older activities are background, not current facts. ')
+    result+=guidance(cfg)+' '
     if cfg.get('_is_group'):
         result+='This is a group conversation. Reply as the owner; do not impersonate other participants or use artificial Participant labels in your reply. '
     if cfg.get('_chat_instructions'):

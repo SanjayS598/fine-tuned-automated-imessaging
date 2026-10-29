@@ -7,7 +7,8 @@ CASES=[
     ('known address',[('user','the address is 42 Pine Street'),('assistant','got it'),('user','what address did I give you?')],['42','pine']),
     ('meeting entrance',[('user','meet at the north library entrance'),('assistant','sounds good'),('user','which entrance are we meeting at?')],['north']),
     ('followup',[('user','what time should we hike?'),('assistant','10am maybe?'),('user','lets do earlier'),('assistant','9:30 maybe?'),('user','what was the earlier time you suggested?')],['9:30']),
-    ('bring item',[('user','please bring the blue notebook'),('assistant','sure ill bring it'),('user','which notebook are you bringing?')],['blue','notebook']),
+    # "The blue one" is a complete informal answer to "which notebook".
+    ('bring item',[('user','please bring the blue notebook'),('assistant','sure ill bring it'),('user','which notebook are you bringing?')],['blue']),
     ('missing meeting time',[('user','can you remind me what time the meeting is?')],[]),
 ]
 

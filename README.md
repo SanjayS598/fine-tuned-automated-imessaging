@@ -385,3 +385,14 @@ This installation uses Qwen2.5-3B-Instruct in 4-bit MLX format for summaries;
 the trained texting model remains separate. If the field is omitted, summaries
 use the configured base model. Download model weights before using the packaged
 app, which runs offline. No conversations are sent to the model host.
+
+## Informal reply style
+
+Generated replies default to brief friend-to-friend texts: short fragments,
+contractions, ordinary sentence casing, and minimal punctuation. The generation
+prompt discourages assistant offers and unrelated follow-up questions. The
+style rewrite cannot substantially pad a short answer. A final formatting pass
+also applies to fallback replies, dropping ending periods and formal punctuation
+while preserving times, amounts, addresses, links, code, and quoted text.
+Per-chat requests for a professional tone or preserved punctuation override
+this default. Manual typed/edited Send text is always sent exactly as entered.

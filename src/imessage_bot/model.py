@@ -3,6 +3,7 @@ from pathlib import Path
 from .policy import owner_adapter
 from .context import context_prompt,inference_system,REPLY_CONTEXT_TOKENS
 from .style_training import STYLE_POLICY,STYLE_SYSTEM,STYLE_PREFIX
+from .texting import finish,guidance
 
 
 def reply_config(cfg,chat_id,group=False):
@@ -66,6 +67,8 @@ class Model:
         system=inference_system(cfg)
         if re.search(r'do you think|should we|let.s do earlier|how about',turns[-1]['content'],re.I):
             system+=' They are asking for a suggestion. Give one tentative option directly, following the owner instructions, instead of deflecting with questions about other people.'
+        if guidance(cfg) and re.search(r'\b(?:your|ur) bot\b',turns[-1]['content'],re.I):
+            system+=' They are referring to the owner’s bot as software separate from the owner. React as its owner to that comment, without scripted thanks or an unrelated plan.'
         prompt,metrics=context_prompt(self.base_tokenizer,turns,system,
                                       cfg.get('context_tokens',REPLY_CONTEXT_TOKENS))
         metrics['context_messages_available']=cfg.get('_context_message_count',len(turns))
@@ -85,21 +88,22 @@ class Model:
             grounded=trim_invented_period(complete(self.base_model,self.base_tokenizer,repair,temp=0),turns)
             if not grounded or not supported(grounded):
                 latest=turns[-1]['content'].lower()
-                grounded='What time was agreed on?' if 'time' in latest or 'when' in latest else 'Which location did we agree on?' if 'where' in latest or 'address' in latest else 'Can you clarify what you mean?'
+                grounded='What time did we say?' if 'time' in latest or 'when' in latest else 'Where were we meeting?' if 'where' in latest or 'address' in latest else 'What do you mean?'
         if self.style_policy!=STYLE_POLICY:
             metrics['style_fallback']=True
-            return grounded
+            return finish(grounded,cfg)
         progress('personalizing_reply')
         style_prompt=self.tokenizer.apply_chat_template([
             dict(role='system',content=STYLE_SYSTEM),
             dict(role='user',content=STYLE_PREFIX+grounded)
         ],tokenize=False,add_generation_prompt=True,return_dict=False)
         styled=complete(self.model,self.tokenizer,style_prompt,temp=0)
-        if not styled or not preserves_key_facts(grounded,styled) or generic_ack(styled) and not generic_ack(grounded):
+        padded=len(styled.split())>max(len(grounded.split())+2,int(len(grounded.split())*1.4))
+        if not styled or padded or not preserves_key_facts(grounded,styled) or generic_ack(styled) and not generic_ack(grounded):
             metrics['style_fallback']=True
-            return grounded
+            return finish(grounded,cfg)
         if styled==grounded:
-            return grounded
+            return finish(grounded,cfg)
         progress('checking_reply')
         check=self.base_tokenizer.apply_chat_template([
             dict(role='system',content='Compare a draft and a style rewrite. Output exactly KEEP only if the rewrite preserves all facts, intent, answers and commitments, without adding details or dropping the answer. Otherwise output REJECT. Short wording is fine; changing the answer is not.'),
@@ -108,8 +112,8 @@ class Model:
         verdict=complete(self.base_model,self.base_tokenizer,check,max_tokens=12,temp=0)
         if not re.match(r'^KEEP\b',verdict,re.I):
             metrics['style_fallback']=True
-            return grounded
-        return styled
+            return finish(grounded,cfg)
+        return finish(styled,cfg)
 
 
 def generic_ack(text):
