@@ -97,6 +97,7 @@ class ProgressTests(unittest.TestCase):
     def test_failed_retraining_preserves_previous_model(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
             config.initialize('2025550199')
+            config.update(lambda c:c.update(training_recipe='owner_only_v1'))
             original=config.load()['adapter_path']
             with patch('imessage_bot.training.export'),patch('imessage_bot.training.train',side_effect=RuntimeError('test')):
                 with self.assertRaises(RuntimeError):
@@ -107,6 +108,7 @@ class ProgressTests(unittest.TestCase):
     def test_successful_training_promotes_only_finished_version(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
             config.initialize('2025550199')
+            config.update(lambda c:c.update(training_recipe='owner_only_v1'))
             original=config.load()['adapter_path']
             def completed(**kwargs):
                 self.assertEqual(config.load()['adapter_path'],original)
@@ -116,6 +118,16 @@ class ProgressTests(unittest.TestCase):
             self.assertNotEqual(config.load()['adapter_path'],original)
             self.assertFalse(config.load()['enabled'])
             self.assertEqual(jobs.status()['progress_percent'],100)
+
+    def test_style_candidate_must_pass_answer_checks_before_activation(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
+            config.initialize('2025550199')
+            original=config.load()['adapter_path']
+            with patch('imessage_bot.style_training.export_style'),patch('imessage_bot.training.train',return_value=dict(iterations=600)),patch('imessage_bot.quality.evaluate',return_value=dict(passed=0,total=6)):
+                with self.assertRaisesRegex(ValueError,'reply checks'):jobs.main()
+            self.assertEqual(config.load()['adapter_path'],original)
+            self.assertFalse(config.load()['enabled'])
+            self.assertEqual(jobs.status()['stage'],'failed')
 
 
 if __name__=='__main__':

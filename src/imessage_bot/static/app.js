@@ -24,14 +24,16 @@ function renderTraining(training) {
   $('training-progress').value = percent;
   const metrics = [];
   if (t.messages_scanned != null) metrics.push(`${t.messages_scanned.toLocaleString()} of your outgoing messages scanned`);
-  if (t.training_policy === 'owner_only_v1') metrics.push('0 incoming messages in training');
+  if (['owner_only_v1', 'owner_style_v2'].includes(t.training_policy)) metrics.push('0 incoming messages in training');
   if (t.stage === 'exporting') metrics.push(`${(t.chats_processed || 0).toLocaleString()} / ${(t.chats_total || 0).toLocaleString()} conversations`);
   if (t.steps_total) metrics.push(`${(t.steps_completed || 0).toLocaleString()} / ${t.steps_total.toLocaleString()} training steps`);
+  if (t.quality_total) metrics.push(`${t.quality_passed || 0} / ${t.quality_total} answer checks passed`);
+  if (t.curated_examples) metrics.push(`${t.curated_examples.toLocaleString()} distinct style examples selected`);
   if (t.prepared_valid) metrics.push(`${t.prepared_valid.toLocaleString()} validation examples`);
   if (busy && t.steps_completed) metrics.push(`~${duration(t.eta_seconds)} remaining`);
   if (t.elapsed_seconds) metrics.push(`${duration(t.elapsed_seconds)} elapsed`);
   $('training-metrics').replaceChildren(...metrics.map(text => element('span', '', text)));
-  $('training-scope').textContent = t.error || `Owner-only training. Only your outgoing text is included; incoming messages are excluded from both prompts and targets. Each example uses a fixed neutral prompt. ${t.excluded_messages?.toLocaleString() || 0} reactions, system entries and non-text messages excluded.`;
+  $('training-scope').textContent = t.error || `Owner-only training. Only your outgoing text is included; incoming messages are excluded from both prompts and targets. ${t.training_policy === 'owner_style_v2' ? 'Content-preserving style transfer uses normalized copies of your outgoing texts; frequent short acknowledgments are excluded.' : 'Each example uses a fixed neutral prompt.'} ${t.excluded_messages?.toLocaleString() || 0} reactions, system entries and non-text messages excluded.`;
   return busy;
 }
 
@@ -177,14 +179,14 @@ function renderPreview() {
   const latest = state.latestAttempt, event = state.workerEvent;
   $('reply-diagnostics').classList.toggle('hidden', !latest && !event);
   const receipt = latest?.delivery;
-  const phase = { queued: 'New message received; waiting for the message burst.', loading_model: 'Loading the local models…', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage];
+  const phase = { queued: 'New message received; waiting for the message burst.', loading_model: 'Loading the local models…', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_context: 'Checking the answer against the recent messages…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage];
   if (phase && (!latest || event.created > latest.created)) $('reply-delivery').textContent = phase;
   else if (event && (!latest || event.created > latest.created) && ['skipped', 'failed', 'cancelled'].includes(event.stage)) $('reply-delivery').textContent = event.detail;
   else if (latest?.status === 'failed') $('reply-delivery').textContent = latest.error || 'The last send failed.';
   else if (receipt?.state === 'failed') $('reply-delivery').textContent = `Messages reported a delivery error (${receipt.error}). Check the conversation in Messages.`;
   else if (receipt?.state === 'delivered') $('reply-delivery').textContent = `Delivered at ${timeFormat.format(new Date(receipt.timestamp * 1000))}: “${latest.reply}”`;
   else if (latest?.status === 'sent') $('reply-delivery').textContent = `Handed to Messages: “${latest.reply}” · Awaiting delivery confirmation.`;
-  else $('reply-delivery').textContent = event?.detail || ({ queued: 'New message received; waiting for the message burst.', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage] || 'Draft ready; waiting for Send.');
+  else $('reply-delivery').textContent = event?.detail || ({ queued: 'New message received; waiting for the message burst.', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_context: 'Checking the answer against the recent messages…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage] || 'Draft ready; waiting for Send.');
   let metrics = {};
   try { metrics = JSON.parse((state.preview || latest)?.context_info || '{}'); } catch {}
   $('reply-context').textContent = metrics.context_tokens ? `${state.preview ? 'Draft' : 'Reply'} context: ${metrics.context_turns} turns from up to ${metrics.context_messages_available} recent messages · ${metrics.context_tokens.toLocaleString()} tokens · ${metrics.style_fallback ? 'Grounded wording retained to preserve meaning.' : 'Personal style checked against the grounded reply.'}` : '';

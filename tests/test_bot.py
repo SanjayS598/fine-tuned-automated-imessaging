@@ -192,6 +192,8 @@ class BotTests(unittest.TestCase):
         self.assertEqual(self.cfg['system_prompt'],'test')
 
     def test_reply_uses_more_than_twenty_messages_of_context(self):
+        self.cfg['context_messages']=120
+        self.worker.tick()
         captured=[]
         class ContextModel:
             def __init__(self,cfg):pass
@@ -204,6 +206,18 @@ class BotTests(unittest.TestCase):
         self.receive(message(81,text='what time did we agree?'))
         self.assertEqual(captured[0][1],81)
         self.assertIn('agreed fact 6 at the library',str(captured[0][0]))
+
+    def test_default_reply_context_is_eight_source_messages(self):
+        self.source.rows=[message(i+1,text='earlier') for i in range(20)]
+        self.worker.cursor=20
+        captured=[]
+        class ContextModel:
+            def __init__(self,cfg):pass
+            def reply(self,turns,cfg):
+                captured.append(cfg['_context_message_count']);return 'answer'
+        self.worker.factory=ContextModel
+        self.receive(message(21,text='latest question'))
+        self.assertEqual(captured,[8])
 
     def test_stale_message_is_skipped(self):
         self.receive(message(date=int((time.time()-APPLE_EPOCH-600)*1e9)))

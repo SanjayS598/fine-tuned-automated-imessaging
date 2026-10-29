@@ -11,7 +11,7 @@ def owner_adapter(cfg):
         folder=Path(cfg['adapter_path'])
         metadata=json.loads((folder/'personal-model.json').read_text())
         return ((folder/'adapters.safetensors').is_file()
-                and metadata.get('training_policy')==OWNER_POLICY
+                and metadata.get('training_policy') in (OWNER_POLICY,'owner_style_v2')
                 and metadata.get('model')==cfg['model'])
     except (OSError,ValueError,KeyError):
         return False

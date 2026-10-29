@@ -193,7 +193,9 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
     if not (data/'manifest.json').is_file():
         raise ValueError('Owner-only dataset manifest missing. Export again; legacy datasets cannot be used.')
     manifest=json.loads((data/'manifest.json').read_text())
-    if manifest.get('training_policy')!=OWNER_POLICY or manifest.get('incoming_messages_included')!=0:
+    from .style_training import STYLE_POLICY,validate_style
+    style=manifest.get('training_policy')==STYLE_POLICY
+    if manifest.get('training_policy') not in (OWNER_POLICY,STYLE_POLICY) or manifest.get('incoming_messages_included')!=0:
         raise ValueError('Only owner-only datasets may be trained. Export again before training.')
     from transformers import AutoTokenizer
     if progress:
@@ -211,13 +213,14 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
                 if not line.strip():
                     continue
                 original=json.loads(line)
-                validate_owner_entry(original)
-                if original['messages'][0]['content']!=cfg['system_prompt']:
+                (validate_style if style else validate_owner_entry)(original)
+                if not style and original['messages'][0]['content']!=cfg['system_prompt']:
                     raise ValueError('Training system prompt must match the configured owner prompt. Export again.')
-                entries=prepare_entry(original,tokenizer)
+                fitted=fit_example(original,tokenizer,512) if style else None
+                entries=([fitted] if fitted else []) if style else prepare_entry(original,tokenizer)
                 for entry in entries:
                     entry['source']=original['source']
-                    validate_owner_entry(entry)
+                    (validate_style if style else validate_owner_entry)(entry)
                     output.write(json.dumps(entry,ensure_ascii=False)+'\n')
                     count += 1
                 if progress and index%100==0:
@@ -240,12 +243,22 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
              '--iters',str(steps),'--batch-size','1','--max-seq-length','1024',
              '--mask-prompt','--grad-checkpoint','--steps-per-report','1',
              '--steps-per-eval','1000','--save-every','500','--seed','42']
+    if style:
+        import yaml
+        recipe=adapter/'training-recipe.yaml'
+        recipe.write_text(yaml.safe_dump(dict(lora_parameters=dict(rank=8,dropout=.1,scale=8.0))))
+        command+=['--config',str(recipe),'--num-layers','8','--learning-rate','1e-5',
+                  '--max-seq-length','512','--steps-per-eval','100','--save-every','100','--val-batches','20']
+    validations=[]
     if progress:
         with subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1) as child:
             try:
                 for line in child.stdout:
                     print(line,end='',flush=True)
                     report=parse_report(line,steps)
+                    if style and VAL_REPORT.search(line):
+                        match=VAL_REPORT.search(line)
+                        validations.append((int(match[1]),float(match[2])))
                     if report:
                         progress(**report)
             except BaseException:
@@ -260,8 +273,14 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
                 raise subprocess.CalledProcessError(result,command)
     else:
         subprocess.run(command,check=True)
-    metadata=dict(model=cfg['model'],training_policy=OWNER_POLICY,incoming_messages_included=0,iterations=steps,train_examples=counts['train'],
+    metadata=dict(model=cfg['model'],training_policy=STYLE_POLICY if style else OWNER_POLICY,incoming_messages_included=0,iterations=steps,train_examples=counts['train'],
                   validation_examples=counts['valid'],passes=steps/counts['train'],completed=time.time())
+    available=[(step,loss) for step,loss in validations if (adapter/f'{step:07d}_adapters.safetensors').is_file()]
+    if style and available:
+        import shutil
+        step,loss=min(available,key=lambda pair:pair[1])
+        shutil.copy2(adapter/f'{step:07d}_adapters.safetensors',adapter/'adapters.safetensors')
+        metadata.update(selected_checkpoint_step=step,best_validation_loss=loss)
     (adapter/'personal-model.json').write_text(json.dumps(metadata))
     print('Training finished. Evaluate in preview mode before live replies.',flush=True)
     return metadata

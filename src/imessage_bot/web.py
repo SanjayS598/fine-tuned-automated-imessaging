@@ -20,7 +20,7 @@ from . import config, jobs, contacts
 from .inbox import Inbox, supports_replies
 from .policy import owner_adapter
 from .transport import SendError
-from .context import CONTEXT_MESSAGES
+from .context import REPLY_CONTEXT_MESSAGES
 
 STATIC = Path(__file__).parent / "static"
 
@@ -320,9 +320,9 @@ class App:
             approved['chat_settings'][str(chat_id)]=dict(enabled=True,instructions='')
             if not eligible(row,approved):
                 raise ValueError('The latest received message cannot be previewed.')
-            history=source.history_through(chat_id,row['rowid'],limit=cfg.get('context_messages',CONTEXT_MESSAGES))
+            history=source.history_through(chat_id,row['rowid'],limit=cfg.get('context_messages',REPLY_CONTEXT_MESSAGES))
             turns=conversation(history,label_senders=row['style']==43,label_dates=True,keep_leading=True)
-            key=(cfg['model'],cfg['adapter_path'])
+            key=(cfg['model'],cfg['adapter_path'],cfg.get('reply_model',cfg['model']))
             if self.preview_model is None or self.preview_model_key!=key:
                 self.preview_model=Model(cfg)
                 self.preview_model_key=key

@@ -51,8 +51,21 @@ def main():
         try:
             config.update(lambda c:c.update(enabled=False,revision=c.get('revision',0)+1))
             progress()
-            export(output_dir=folder/'data',progress=progress)
-            metadata=train(data_dir=folder/'data',adapter_dir=folder/'adapters',progress=progress)
+            cfg=config.load()
+            style=cfg.get('training_recipe')=='owner_style_v2'
+            if style:
+                from .style_training import export_style
+                export_style(output_dir=folder/'data',progress=progress)
+            else:export(output_dir=folder/'data',progress=progress)
+            metadata=train(iters=cfg.get('style_training_steps',600) if style else None,data_dir=folder/'data',adapter_dir=folder/'adapters',progress=progress)
+            if style:
+                from .quality import evaluate
+                progress(stage='validating',quality_check='Checking answers before activating the new adapter')
+                report=evaluate(dict(config.load(),adapter_path=str(folder/'adapters')))
+                (folder/'quality-report.json').write_text(json.dumps(report,indent=2))
+                if report['passed']!=report['total']:
+                    raise ValueError('The candidate did not pass the reply checks; the previous adapter is preserved.')
+                progress(quality_passed=report['passed'],quality_total=report['total'])
             # Switch only after successful completion. Keep the previous model
             # intact and retain the paused state while a new version is trained.
             config.update(lambda c:c.update(adapter_path=str(folder/'adapters'),enabled=False,revision=c.get('revision',0)+1))
@@ -60,7 +73,7 @@ def main():
                      steps_total=metadata['iterations'],eta_seconds=0,finished=time.time())
         except BaseException as exc:
             progress(stage='interrupted' if isinstance(exc,KeyboardInterrupt) else 'failed',finished=time.time(),
-                     error='Training did not finish. Your previous model is preserved. Details are in .local/training.log.')
+                     error='The candidate failed reply checks. Your previous model is preserved.' if (folder/'quality-report.json').exists() else 'Training did not finish. Your previous model is preserved. Details are in .local/training.log.')
             raise
 
 

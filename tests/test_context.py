@@ -1,7 +1,10 @@
 import unittest
+import types
+from unittest.mock import patch
 
 from imessage_bot.context import context_prompt
-from imessage_bot.model import preserves_key_facts,Model
+from imessage_bot.model import preserves_key_facts,Model,unsupported_fact_numbers,trim_invented_period
+from imessage_bot.style_training import STYLE_POLICY
 
 
 class Tokenizer:
@@ -13,6 +16,30 @@ class Tokenizer:
 
 
 class ContextTests(unittest.TestCase):
+    def test_generic_style_rewrite_cannot_drop_a_specific_answer(self):
+        model=object.__new__(Model)
+        model.model=object();model.tokenizer=Tokenizer()
+        model.base_model=object();model.base_tokenizer=model.tokenizer
+        model.style_policy=STYLE_POLICY
+        replies=iter(['the north entrance','I see'])
+        fake=types.SimpleNamespace(generate=lambda *a,**k:next(replies),load=lambda *a:None)
+        sampler=types.SimpleNamespace(make_sampler=lambda **k:None)
+        with patch.dict('sys.modules',{'mlx_lm':fake,'mlx_lm.sample_utils':sampler}):
+            result=model.reply([dict(role='user',content='meet at the north entrance'),dict(role='assistant',content='okay'),dict(role='user',content='which entrance?')],{})
+        self.assertEqual(result,'the north entrance')
+        self.assertTrue(model.last_context['style_fallback'])
+
+    def test_unknown_fact_cannot_borrow_a_time_from_message_metadata(self):
+        turns=[dict(role='user',content='[Oct 29 14:00] can you remind me what time the meeting is?')]
+        self.assertTrue(unsupported_fact_numbers('The meeting is at 14:00',turns))
+        self.assertFalse(unsupported_fact_numbers('What time was agreed on?',turns))
+        self.assertTrue(unsupported_fact_numbers('We agreed 6 pm',[dict(role='user',content='we said 6. what time was it?')]))
+        self.assertFalse(preserves_key_facts('meet at 6','meet at 6 pm'))
+        self.assertEqual(trim_invented_period('meet at 6 PM',[dict(role='user',content='we agreed on 6')]),'meet at 6')
+        self.assertEqual(trim_invented_period('meet at 6 PM',[dict(role='user',content='we agreed on 6 pm')]),'meet at 6 PM')
+        self.assertFalse(preserves_key_facts('the north entrance','the main entrance'))
+        self.assertFalse(preserves_key_facts('I suggested 9:30','9:30 sounds good for us'))
+
     def test_reply_does_not_copy_context_timestamp(self):
         self.assertEqual(Model.clean('[Oct 29 12:11] sounds good'),'sounds good')
         self.assertEqual(Model.clean('meet at [the library]'),'meet at [the library]')

@@ -94,4 +94,5 @@ def initialize(number):
                   db_path=str(Path.home() / "Library/Messages/chat.db"),
                   model=MODEL, adapter_path=str(HOME / "adapters"),
                   poll_seconds=3, debounce_seconds=8, max_age_seconds=180,
+                  context_messages=8,context_tokens=3072,training_recipe='owner_style_v2',style_training_steps=600,
                   cooldown_seconds=0, max_per_hour=30, system_prompt=SYSTEM))

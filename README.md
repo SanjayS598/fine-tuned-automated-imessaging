@@ -101,16 +101,21 @@ numbers, or screenshots are published with the public repository.
 The per-chat reply cooldown is disabled by default (`cooldown_seconds: 0`).
 The 8-second message-burst wait still combines consecutive incoming texts.
 
-Reply generation reads up to **120 recent messages** from the selected chat,
-with timestamps and group speaker labels, within an **8,192-token input budget**.
+Reply generation reads up to **8 recent messages** from the selected chat,
+with timestamps and group speaker labels, within a **3,072-token input budget**.
 Older context is trimmed first while retaining the latest question. Leading
 owner messages are preserved so an earlier stated time or plan is not discarded
 just because the history window starts with your message.
 
 A local base-model pass drafts an answer from that context. Your trained model
 then applies personal style; numeric/time checks and a local meaning check reject
-rewrites that change the answer, falling back to the grounded wording. Both
-passes use the already-installed local model; no conversation is uploaded and
+rewrites that change the answer, falling back to the grounded wording. Concrete
+fact questions also reject new numbers, dates, or directions absent from the
+recent messages; missing details prompt a clarification. Tentative suggestions
+cannot become confirmed plans during restyling. Both
+passes run locally. `reply_model` can select a stronger local model for understanding
+without changing the trained style model. Generic acknowledgments cannot replace
+a substantive answer during the style rewrite. No conversation is uploaded and
 no incoming text is used for fine-tuning. This improves grounding but does not
 guarantee that every generated answer is correct.
 
@@ -127,9 +132,15 @@ completed/total optimizer steps, percentage of the current stage, elapsed time,
 and an estimated remaining time. Estimates update from MLX reports and can vary
 with conversation length. Reactions, system events and attachment-only messages
 are counted but excluded from text training. Only rows marked `is_from_me = 1` are read by the training exporter.
-Incoming text is excluded from both prompts and targets. Each example pairs a
-fixed neutral prompt with one of your outgoing messages. Your outgoing messages without chat links
-are also scanned, using the same fixed neutral prompt.
+Incoming text is excluded from both prompts and targets. The current UI training
+recipe (`owner_style_v2`) pairs a deterministic normalization of an outgoing
+message with your original text, so the adapter learns to change style while
+preserving content. Short fillers are excluded; targets are deduplicated and
+balanced by length. Outgoing messages without chat links are also scanned.
+A 600-step fresh run with held-out validation replaces the earlier unconditional
+phrase-learning recipe. The best saved validation checkpoint is checked on
+synthetic answer tests before activation; failed candidates preserve the previous
+adapter. Previous adapters and private training data remain available locally.
 
 Use **Contacts → Connect contacts** to import names from macOS Contacts. Grant
 **Inbox Contacts** (or the app hosting Inbox) access under **System Settings →
@@ -210,7 +221,7 @@ uv run imessage-bot chat
 ```
 
 The model downloads from Hugging Face on first use. Training and inference run
-locally. The dataset pairs a fixed neutral `user` prompt with **your outgoing text** as
+locally. This legacy CLI export pairs a fixed neutral `user` prompt with **your outgoing text** as
 `assistant`. Other people's messages are never included as training context.
 Prompt masking trains only on your text. Six-hour
 conversation sessions stay together in the train/validation split, avoiding
@@ -230,16 +241,22 @@ imitation. Generated bot replies are tracked and their matching outgoing message
 are excluded from future exports. This filtering only
 covers sends recorded by this bot installation.
 
-Datasets and adapters carry an `owner_only_v1` policy marker. The trainer
+Legacy CLI datasets carry `owner_only_v1`; the content-preserving UI recipe
+carries `owner_style_v2`. Both exclude incoming messages. The trainer
 rejects legacy mixed-context datasets, and the bot refuses to load old adapters
-without this marker. An owner-only restart trains a fresh adapter from the base
+without an owner-only policy marker. Unconditional v1 adapters remain available
+for rollback, but the reply pipeline bypasses their style rewrite; retrain from
+the UI to produce the content-preserving v2 adapter. An owner-only restart trains a fresh adapter from the base
 model; it never resumes a mixed-context checkpoint. Live replies still read
 incoming messages to answer them, without updating model weights.
 
 The GUI trains a new version in `.local/runs/<run-id>/` and preserves your
-current model until the new run completes successfully. Each GUI run makes one
-full pass through every prepared training example (batch size one); about 10%
-of conversation sessions are held out for validation. The original 200-step CLI
+current model until training and the answer checks complete successfully. The
+style recipe defaults to 600 steps on up to 2,048 distinct substantive messages,
+with 10% of unique targets held out for validation. It trains fresh adapters with
+prompt masking, a low learning rate, and LoRA dropout, then selects the best
+saved validation checkpoint. It does not run repeated full passes over every
+short acknowledgment. The original 200-step CLI
 command above is a short smoke run, not a full training pass. To train a manual
 replacement, set a different `adapter_path` while paused and train again.
 Changing the base `model` also requires a matching adapter. Restart the worker

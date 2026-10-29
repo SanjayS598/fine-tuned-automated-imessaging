@@ -3,6 +3,8 @@ from datetime import datetime
 
 CONTEXT_MESSAGES = 120
 CONTEXT_TOKENS = 8192
+REPLY_CONTEXT_MESSAGES = 8
+REPLY_CONTEXT_TOKENS = 3072
 
 
 def context_prompt(tokenizer,turns,system,limit=CONTEXT_TOKENS):
@@ -32,8 +34,10 @@ def inference_system(cfg):
     now=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')
     result=('Write only a short text reply to the latest message. '
         'Use facts from the conversation. Answer the question directly. '
-        'Do not change agreed times, places or plans. Do not propose a different plan. '
-        'Do not invent details. Keep it casual and natural. '
+        'Keep accepted plans accurate; a suggestion is not an agreement. '
+        'When asked for a suggestion, you may offer one, clearly as a suggestion. '
+        'Do not invent the owner’s availability, location or actions. If a personal fact is unknown, ask a short clarifying question. '
+        'Avoid generic acknowledgments when the message asks a question. Keep it casual and natural. '
         'Bracketed timestamps are context metadata; never include them in your reply. '
         f'Current local time: {now}. Dated older activities are background, not current facts. ')
     if cfg.get('_is_group'):

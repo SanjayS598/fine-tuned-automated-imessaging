@@ -7,7 +7,7 @@ from .messages import Messages, conversation, eligible,clean,decode_text
 from .model import Model,reply_config,sends_automatically
 from .state import State
 from .transport import send,SendError
-from .context import CONTEXT_MESSAGES
+from .context import REPLY_CONTEXT_MESSAGES
 
 LOG = logging.getLogger(__name__)
 APPLE_EPOCH = 978307200
@@ -72,7 +72,7 @@ class Runner:
     def current(self, row, cfg):
         if self.loader() != cfg or not cfg["enabled"]:
             return None
-        history = self.messages.history(row["chat_id"],limit=cfg.get('context_messages',CONTEXT_MESSAGES))
+        history = self.messages.history(row["chat_id"],limit=cfg.get('context_messages',REPLY_CONTEXT_MESSAGES))
         self.context_message_count=len(history)
         if any(item['is_from_me'] and item['rowid']>row['rowid'] for item in history):
             return None
@@ -87,7 +87,7 @@ class Runner:
         if not turns:
             self.state.event(row['chat_id'],'cancelled','A newer message, manual reply or settings change cancelled this reply')
             return
-        key = (cfg["model"], cfg["adapter_path"])
+        key = (cfg["model"], cfg["adapter_path"],cfg.get("reply_model",cfg["model"]))
         if self.model is None or key != self.model_key:
             self.state.event(row['chat_id'],'loading_model','Loading the local models')
             self.model = self.factory(cfg)
