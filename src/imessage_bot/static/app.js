@@ -204,6 +204,7 @@ async function olderMessages() {
 
 function renderStatus() {
   const data = state.status;
+  if (!data) return;
   $('master-toggle').setAttribute('aria-checked', String(data.enabled));
   $('master-label').textContent = data.enabled ? 'Auto replies running' : 'Auto replies paused';
   $('master-detail').textContent = data.enabled ? (data.mode === 'preview' ? 'Preview mode · nothing gets sent' : 'Sending to enabled chats') : "You're in control.";
@@ -219,6 +220,7 @@ function renderStatus() {
   $('model-description').textContent = busy ? `${(data.training.progress_percent || 0).toFixed(2)}% of this stage · ${data.training.steps_total?.toLocaleString() || 'Preparing'} examples` : data.trained ? 'Trained on your messages. Ready to sound like you.' : 'Train on your outgoing messages to get started.';
   $('setup-connection').textContent = data.connected ? 'Your messages are connected and stay on this Mac.' : data.error;
   $('setup-connection-badge').textContent = data.connected ? 'Connected ✓' : 'Needs access';
+  $('messages-access').classList.toggle('hidden', data.connected);
   $('verify-number').textContent = data.number;
   if (data.sender_verified) $('verify-check').checked = true;
   $('verify-save').textContent = data.sender_verified ? 'Number confirmed ✓' : 'Confirm number';
@@ -236,8 +238,18 @@ function renderStatus() {
 
 async function refresh(initial = false) {
   try {
-    const [status, inbox] = await Promise.all([api('/api/status'), api('/api/chats')]);
-    state.status = status; state.chats = inbox.chats;
+    const [statusResult, inboxResult] = await Promise.allSettled([api('/api/status'), api('/api/chats')]);
+    if (statusResult.status !== 'fulfilled') throw statusResult.reason;
+    const status = statusResult.value;
+    state.status = status;
+    if (!status.connected) {
+      renderStatus();
+      $('chat-list').replaceChildren(element('div', 'loading-state', status.error));
+      if (initial) $('setup-dialog').showModal();
+      return;
+    }
+    if (inboxResult.status !== 'fulfilled') throw inboxResult.reason;
+    state.chats = inboxResult.value.chats;
     renderStatus(); renderChats();
     if (state.selected && !state.loading) {
       const request = state.request, id = state.selected;
@@ -313,6 +325,7 @@ $('verify-save').addEventListener('click', async () => { if (!$('verify-check').
 $('train-start').addEventListener('click', async () => { $('train-start').disabled = true; try { await api('/api/train', {}); toast('Local training started. You can keep browsing.'); await refresh(); } catch (error) { toast(error.message, true); $('train-start').disabled = false; } });
 $('contacts-open').addEventListener('click', () => { renderStatus(); $('setup-dialog').showModal(); $('contacts-sync').focus(); });
 $('contacts-sync').addEventListener('click', async () => { $('contacts-sync').disabled = true; try { await api('/api/contacts/sync', {}); toast('Contacts sync started. Allow access if macOS asks.'); setTimeout(() => refresh(), 1500); } catch (error) { toast(error.message, true); $('contacts-sync').disabled = false; } });
+$('messages-access').addEventListener('click', async () => { try { await api('/api/permissions/messages', {}); toast('Enable Inbox in Full Disk Access, then quit and reopen the app.'); } catch (error) { toast(error.message, true); } });
 $('details-toggle').addEventListener('click', () => document.querySelector('.workspace').classList.toggle('show-settings'));
 $('settings-close').addEventListener('click', () => document.querySelector('.workspace').classList.remove('show-settings'));
 $('mobile-back').addEventListener('click', () => document.querySelector('.workspace').classList.remove('thread-open', 'show-settings'));

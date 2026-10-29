@@ -106,6 +106,8 @@ class App:
             connected,error = True,None
         except sqlite3.Error:
             connected,error = False,"Give this app Full Disk Access in macOS Settings, then reopen it."
+            if cfg.get('packaged_data'):
+                error='Enable Inbox in System Settings → Privacy & Security → Full Disk Access. Add Inbox from your Applications folder, then quit and reopen Inbox.'
         trained = owner_adapter(cfg)
         return dict(enabled=cfg["enabled"],mode="preview" if cfg["dry_run"] else "live",
                     number=cfg["own_identities"][0],sender_verified=cfg["sender_verified"],
@@ -117,6 +119,8 @@ class App:
         allowed = {"enabled","mode","verified_number"}
         if not payload or set(payload)-allowed:
             raise ValueError("Unknown control.")
+        if payload.get('enabled') and not self.status()['connected']:
+            raise ValueError('Messages access is required before enabling replies. Open Full Disk Access settings in Setup.')
         def edit(cfg):
             if "mode" in payload:
                 if payload["mode"] not in ("preview","live"):
@@ -289,6 +293,9 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Contacts sync is already running.')
                     self.app.contacts_process=self.app.spawn('imessage_bot.contacts','--request',log='contacts.log')
                 self.respond(202,{'started':True})
+            elif self.path == '/api/permissions/messages':
+                subprocess.Popen(['/usr/bin/open','x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'])
+                self.respond(200,{'opened':True})
             else:
                 self.respond(404,{"error":"Not found."})
         except (ValueError,TypeError,KeyError) as exc:

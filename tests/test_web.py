@@ -170,6 +170,15 @@ class InboxTests(unittest.TestCase):
         self.assertIn('Train',body['error'])
         self.assertFalse(config.load()['enabled'])
 
+    def test_packaged_app_explains_missing_messages_permission(self):
+        config.update(lambda c:c.update(db_path=str(self.home/'missing.db'),packaged_data=True))
+        status,data,_=self.request('/api/status')
+        self.assertEqual(status,200)
+        self.assertFalse(data['connected'])
+        self.assertIn('Enable Inbox',data['error'])
+        self.assertEqual(self.request('/api/chats')[0],503)
+        self.assertEqual(self.request('/api/control',dict(enabled=True))[0],400)
+
     def test_static_assets_have_private_browser_policy(self):
         status,body,headers=self.request('/')
         self.assertEqual(status,200)

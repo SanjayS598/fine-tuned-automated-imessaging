@@ -11,6 +11,45 @@ contacts it can reply to and whether it saves previews or sends replies.
 
 ## Open your inbox
 
+### Desktop macOS app
+
+The packaged app installs to `~/Applications/Inbox.app`, with a launch icon on
+your Desktop. Double-click **Inbox** there to open its native window. Python,
+MLX and the UI are bundled; no terminal, project checkout or Python installation
+is needed to launch the installed app. The base model is copied locally for
+offline inference.
+
+Private settings, the trained adapter, cached Contacts and future training runs
+live in `~/Library/Application Support/Personal Inbox/`, outside the app bundle.
+The initial package imports your current trained owner-only model and starts
+paused in preview mode. Rebuilding preserves that private app data.
+
+On first launch, macOS requires the new **Inbox** app to have its own **Full Disk
+Access**, even if your terminal already has it. In **System Settings → Privacy &
+Security → Full Disk Access**, add `~/Applications/Inbox.app`, enable it, then
+quit and reopen Inbox. Setup contains a button to open that Settings pane.
+Messages Automation permission may be requested on the first live send.
+
+Closing the app window or using **Inbox → Quit Inbox** stops its local server and
+reply worker and pauses replies. The packaged app uses local port 8766; the
+development UI uses 8765. Use **View → Back to Inbox** (⌘1) after opening an
+attachment in the native window.
+
+To build the app from a configured Mac checkout with a finished owner-only model:
+
+```sh
+PYTHONPATH=src .venv/bin/python scripts/package_macos.py
+# Quit Inbox before updating the installed app; a backup is retained.
+PYTHONPATH=src .venv/bin/python scripts/package_macos.py --replace
+```
+
+Building requires Python 3.12, installed project dependencies, Apple's command
+line developer tools, and the downloaded base model. The builder signs the local
+app and verifies it before installing. No messages or personal model files are
+added to the public repository.
+
+### Development UI
+
 After installing dependencies and initializing your number below, double-click
 **`start.command`** in Finder, or run:
 
