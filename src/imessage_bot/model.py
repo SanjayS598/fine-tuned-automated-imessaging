@@ -1,9 +1,12 @@
 import re
 from pathlib import Path
+from .policy import owner_adapter
 
 
 class Model:
     def __init__(self, cfg):
+        if not owner_adapter(cfg):
+            raise ValueError('An owner-only model is required. Earlier mixed-context adapters are disabled; train a new version.')
         adapter = Path(cfg["adapter_path"])
         if not (adapter / "adapters.safetensors").is_file():
             raise ValueError("No trained adapter. Run export and train before generating replies.")

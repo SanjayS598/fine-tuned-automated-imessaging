@@ -76,13 +76,17 @@ class Messages:
         return self.query("""SELECT c.ROWID AS chat_id,c.service_name AS service,
             (SELECT h.id FROM chat_handle_join j JOIN handle h ON h.ROWID=j.handle_id
              WHERE j.chat_id=c.ROWID LIMIT 1) AS contact
-            FROM chat c WHERE EXISTS(SELECT 1 FROM chat_message_join j WHERE j.chat_id=c.ROWID)
+            FROM chat c WHERE EXISTS(SELECT 1 FROM chat_message_join j JOIN message m ON m.ROWID=j.message_id
+                WHERE j.chat_id=c.ROWID AND m.is_from_me=1)
             ORDER BY c.ROWID""")
+
+    def training_history(self,chat_id):
+        return self.query(SELECT + " WHERE c.ROWID=? AND m.is_from_me=1 ORDER BY m.date,m.ROWID",(chat_id,))
 
     def orphan_history(self):
         return self.query("""SELECT m.ROWID AS rowid,m.guid AS message_guid,m.text,m.attributedBody,
             m.is_from_me,m.date,m.associated_message_type,m.item_type,0 AS chat_id
-            FROM message m WHERE NOT EXISTS(SELECT 1 FROM chat_message_join j WHERE j.message_id=m.ROWID)
+            FROM message m WHERE m.is_from_me=1 AND NOT EXISTS(SELECT 1 FROM chat_message_join j WHERE j.message_id=m.ROWID)
             ORDER BY m.date,m.ROWID""")
 
 

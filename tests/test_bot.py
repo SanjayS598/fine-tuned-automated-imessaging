@@ -207,8 +207,9 @@ class BotTests(unittest.TestCase):
                 message(5,is_from_me=1,text='my second',date=message()['date']+7*3600*10**9)]
         groups = examples(rows, 'system')
         self.assertEqual(len(groups),2)
-        self.assertEqual(groups[0][0]['messages'][-1],dict(role='assistant',content='my reply'))
-        self.assertNotIn('orphan',json.dumps(groups))
+        self.assertEqual(groups[0][1]['messages'][-1],dict(role='assistant',content='my reply'))
+        self.assertIn('orphan',json.dumps(groups))
+        self.assertNotIn('question',json.dumps(groups))
         self.assertNotIn('question',json.dumps(groups[1]))
 
     def test_training_budget_preserves_assistant_target(self):

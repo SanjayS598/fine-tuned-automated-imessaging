@@ -6,6 +6,7 @@ import time
 import uuid
 
 from . import config
+from .policy import OWNER_POLICY
 
 BUSY = ('exporting','preparing','training','validating')
 
@@ -42,7 +43,8 @@ def main():
         folder=config.HOME/'runs'/run_id
         config.private_dir(folder)
         values=dict(run_id=run_id,pid=os.getpid(),started=time.time(),stage='exporting',
-                    progress_percent=0,scope='All conversations: iMessage, SMS, RCS and groups')
+                    progress_percent=0,training_policy=OWNER_POLICY,incoming_messages_included=0,
+                    scope='Only your outgoing messages; no incoming training context')
         def progress(**changes):
             values.update(changes)
             write_status(**values)

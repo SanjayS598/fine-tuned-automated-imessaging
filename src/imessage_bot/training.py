@@ -7,36 +7,32 @@ import time
 from pathlib import Path
 
 from . import config
-from .messages import Messages, clean, conversation, decode_text
+from .messages import Messages, clean, decode_text
+from .policy import OWNER_POLICY, OWNER_PROMPT, validate_owner_entry
 from .state import State
 
 
 def examples(rows, system, include_leading=False):
-    """Keep 6-hour sessions together; only the owner's replies are targets."""
-    sessions, session, last_date = [], [], None
+    """One owner-written message per target; no historical incoming context."""
+    groups,session,last_date=[],[],None
     for row in rows:
-        date = row['date']
-        if last_date is not None and date-last_date > 6*3600*1_000_000_000:
+        # Defense in depth even if callers accidentally supply mixed rows.
+        if row['is_from_me'] != 1 or not clean(row):
+            continue
+        text=decode_text(row)
+        if not text:
+            continue
+        if last_date is not None and row['date']-last_date > 6*3600*1_000_000_000:
             if session:
-                sessions.append(session)
-            session = []
-        session.append(row)
-        last_date = date
+                groups.append(session)
+            session=[]
+        source=dict(is_from_me=1,message_guid=row.get('message_guid') or f"row-{row.get('rowid',0)}")
+        session.append(dict(messages=[dict(role='system',content=system),
+                                     dict(role='user',content=OWNER_PROMPT),
+                                     dict(role='assistant',content=text)],source=source))
+        last_date=row['date']
     if session:
-        sessions.append(session)
-    groups = []
-    for session in sessions:
-        turns = conversation(session, max_chars=None, keep_leading=include_leading)
-        batch = []
-        for i, turn in enumerate(turns):
-            if turn['role'] != 'assistant' or i == 0:
-                continue
-            start = max(0, i-7)
-            while turns[start]['role'] != 'user':
-                start += 1
-            batch.append({'messages':[{'role':'system','content':system}]+turns[start:i+1]})
-        if batch:
-            groups.append(batch)
+        groups.append(session)
     return groups
 
 
@@ -51,7 +47,8 @@ def export(contacts=None, output_dir=None, progress=None):
     stats = dict(chats_total=len(chats),chats_processed=0,messages_scanned=0,
                  usable_messages=0,outgoing_messages=0,excluded_messages=0,
                  duplicate_messages=0,generated_sessions_excluded=0,
-                 services={},scope='All conversations: iMessage, SMS, RCS and groups')
+                 services={},training_policy=OWNER_POLICY,incoming_messages_included=0,
+                 scope='Only your outgoing messages; no incoming training context')
     try:
         for index, chat in enumerate(chats):
             if contacts:
@@ -60,45 +57,32 @@ def export(contacts=None, output_dir=None, progress=None):
                         continue
                 except ValueError:
                     continue
-            rows = orphans if chat['chat_id']==0 else source.all_history(chat['chat_id'])
-            filtered, session, last_date, generated = [], [], None, False
+            rows = orphans if chat['chat_id']==0 else source.training_history(chat['chat_id'])
+            filtered=[]
             for row in rows:
-                guid = row['message_guid'] or f"row-{row['rowid']}"
+                if row['is_from_me'] != 1:
+                    raise ValueError('Incoming message reached the owner-only exporter.')
+                guid=row['message_guid'] or f"row-{row['rowid']}"
                 if guid in seen:
-                    stats['duplicate_messages'] += 1
+                    stats['duplicate_messages']+=1
                     continue
                 seen.add(guid)
-                stats['messages_scanned'] += 1
+                stats['messages_scanned']+=1
                 if not clean(row):
-                    stats['excluded_messages'] += 1
+                    stats['excluded_messages']+=1
                     continue
-                text = decode_text(row)
+                text=decode_text(row)
                 if not text:
-                    stats['excluded_messages'] += 1
+                    stats['excluded_messages']+=1
                     continue
-                stats['usable_messages'] += 1
-                stats['outgoing_messages'] += bool(row['is_from_me'])
-                row['text'], row['attributedBody'] = text, None
-                if chat['chat_id']==0:
-                    # Unlinked rows have no reliable conversation context. Give
-                    # each owner-written message its own neutral-context target.
-                    groups.extend(examples([row],cfg['system_prompt'],include_leading=True))
+                if state.generated(chat['chat_id'],text):
+                    stats['generated_sessions_excluded']+=1
                     continue
-                if last_date is not None and row['date']-last_date > 6*3600*1_000_000_000:
-                    if not generated:
-                        filtered.extend(session)
-                    else:
-                        stats['generated_sessions_excluded'] += 1
-                    session, generated = [], False
-                session.append(row)
-                last_date = row['date']
-                if row['is_from_me'] and state.generated(chat['chat_id'],text):
-                    generated = True
-            if not generated:
-                filtered.extend(session)
-            else:
-                stats['generated_sessions_excluded'] += 1
-            groups.extend(examples(filtered,cfg['system_prompt'],include_leading=True))
+                stats['usable_messages']+=1
+                stats['outgoing_messages']+=1
+                row['text'],row['attributedBody']=text,None
+                filtered.append(row)
+            groups.extend(examples(filtered,cfg['system_prompt']))
             stats['chats_processed'] = index+1
             stats['services'][chat['service'] or 'unknown'] = stats['services'].get(chat['service'] or 'unknown',0)+1
             if progress:
@@ -141,7 +125,7 @@ def prepare_entry(entry,tokenizer,limit=1024):
     if fitted:
         return [fitted]
     # Preserve long owner replies by splitting their target tokens. Keep the
-    # recent incoming context, instead of dropping an otherwise usable message.
+    # fixed neutral prompt, instead of including another person's message.
     system,user,target = entry['messages'][0],entry['messages'][-2],entry['messages'][-1]
     results = []
     text,offset=target['content'],0
@@ -206,6 +190,11 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
     adapter = Path(adapter_dir or cfg['adapter_path'])
     if (adapter/'adapters.safetensors').exists():
         raise ValueError('Adapter already exists. Choose a new adapter path.')
+    if not (data/'manifest.json').is_file():
+        raise ValueError('Owner-only dataset manifest missing. Export again; legacy datasets cannot be used.')
+    manifest=json.loads((data/'manifest.json').read_text())
+    if manifest.get('training_policy')!=OWNER_POLICY or manifest.get('incoming_messages_included')!=0:
+        raise ValueError('Only owner-only datasets may be trained. Export again before training.')
     from transformers import AutoTokenizer
     if progress:
         progress(stage='preparing',progress_percent=0)
@@ -221,8 +210,14 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
             for index,line in enumerate(stream):
                 if not line.strip():
                     continue
-                entries=prepare_entry(json.loads(line),tokenizer)
+                original=json.loads(line)
+                validate_owner_entry(original)
+                if original['messages'][0]['content']!=cfg['system_prompt']:
+                    raise ValueError('Training system prompt must match the configured owner prompt. Export again.')
+                entries=prepare_entry(original,tokenizer)
                 for entry in entries:
+                    entry['source']=original['source']
+                    validate_owner_entry(entry)
                     output.write(json.dumps(entry,ensure_ascii=False)+'\n')
                     count += 1
                 if progress and index%100==0:
@@ -265,7 +260,7 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
                 raise subprocess.CalledProcessError(result,command)
     else:
         subprocess.run(command,check=True)
-    metadata=dict(model=cfg['model'],iterations=steps,train_examples=counts['train'],
+    metadata=dict(model=cfg['model'],training_policy=OWNER_POLICY,incoming_messages_included=0,iterations=steps,train_examples=counts['train'],
                   validation_examples=counts['valid'],passes=steps/counts['train'],completed=time.time())
     (adapter/'personal-model.json').write_text(json.dumps(metadata))
     print('Training finished. Evaluate in preview mode before live replies.',flush=True)

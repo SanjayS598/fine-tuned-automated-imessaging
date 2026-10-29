@@ -23,14 +23,15 @@ function renderTraining(training) {
   $('training-main-progress').value = percent;
   $('training-progress').value = percent;
   const metrics = [];
-  if (t.messages_scanned != null) metrics.push(`${t.messages_scanned.toLocaleString()} messages scanned`);
+  if (t.messages_scanned != null) metrics.push(`${t.messages_scanned.toLocaleString()} of your outgoing messages scanned`);
+  if (t.training_policy === 'owner_only_v1') metrics.push('0 incoming messages in training');
   if (t.stage === 'exporting') metrics.push(`${(t.chats_processed || 0).toLocaleString()} / ${(t.chats_total || 0).toLocaleString()} conversations`);
   if (t.steps_total) metrics.push(`${(t.steps_completed || 0).toLocaleString()} / ${t.steps_total.toLocaleString()} training steps`);
   if (t.prepared_valid) metrics.push(`${t.prepared_valid.toLocaleString()} validation examples`);
   if (busy && t.steps_completed) metrics.push(`~${duration(t.eta_seconds)} remaining`);
   if (t.elapsed_seconds) metrics.push(`${duration(t.elapsed_seconds)} elapsed`);
   $('training-metrics').replaceChildren(...metrics.map(text => element('span', '', text)));
-  $('training-scope').textContent = t.error || (t.steps_total ? `One full pass through every training example. ${t.excluded_messages?.toLocaleString() || 0} reactions, system entries and non-text messages excluded. Incoming messages provide context; only your replies are training targets.` : 'All conversations, including iMessage, SMS, RCS and groups. No message history leaves this Mac.');
+  $('training-scope').textContent = t.error || `Owner-only training. Only your outgoing text is included; incoming messages are excluded from both prompts and targets. Each example uses a fixed neutral prompt. ${t.excluded_messages?.toLocaleString() || 0} reactions, system entries and non-text messages excluded.`;
   return busy;
 }
 
@@ -225,7 +226,7 @@ function renderStatus() {
   $('training-progress').classList.toggle('hidden', !busy);
   $('train-start').disabled = busy || !data.connected;
   $('train-start').textContent = busy ? 'Training in progress…' : data.trained ? 'Train a new version ↗' : 'Train my model ↗';
-  $('training-description').textContent = busy ? `${data.training.steps_completed?.toLocaleString() || 0} / ${data.training.steps_total?.toLocaleString() || '…'} steps · ${data.training.progress_percent || 0}% of this stage. Your previous model is preserved until this run succeeds.` : data.training?.error || (data.trained ? 'Your model is ready. A new run covers all usable messages in iMessage, SMS, RCS and groups. Your current model is preserved until the new version finishes.' : 'Train locally on your outgoing messages across all conversations. Your history stays on this Mac.');
+  $('training-description').textContent = busy ? `${data.training.steps_completed?.toLocaleString() || 0} / ${data.training.steps_total?.toLocaleString() || '…'} steps · ${data.training.progress_percent || 0}% of this stage. Only your outgoing text is used. Incoming messages are never training context.` : data.training?.error || (data.trained ? 'Your owner-only model is ready. A new run trains on your outgoing messages only, across all conversations.' : 'Train locally on your outgoing messages only. Earlier mixed-context models are disabled. Your history stays on this Mac.');
   const contacts = data.contacts || {};
   $('contacts-description').textContent = contacts.stage === 'connected' ? `${contacts.count.toLocaleString()} contacts synced${contacts.limited ? ' (limited access)' : ''}. Names appear automatically in your inbox. Contact data stays on this Mac.` : contacts.error || 'Connect macOS Contacts to show names beside your messages. Only names, phone numbers and email addresses are read.';
   $('contacts-sync').textContent = contacts.stage === 'requesting' ? 'Waiting for macOS permission…' : contacts.stage === 'connected' ? 'Refresh contacts' : contacts.stage === 'permission_needed' ? 'Retry contacts access' : 'Connect contacts';

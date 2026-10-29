@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from imessage_bot import config, contacts, jobs
 from imessage_bot.training import examples, parse_report, prepare_entry
+from imessage_bot.policy import OWNER_POLICY, OWNER_PROMPT
 
 
 class CharacterTokenizer:
@@ -82,7 +83,8 @@ class ProgressTests(unittest.TestCase):
             config.initialize('2025550199')
             data=Path(folder)/'data'
             data.mkdir()
-            example=dict(messages=[dict(role='system',content='s'),dict(role='user',content='question'),dict(role='assistant',content='reply')])
+            example=dict(messages=[dict(role='system',content=config.load()['system_prompt']),dict(role='user',content=OWNER_PROMPT),dict(role='assistant',content='reply')],source=dict(is_from_me=1,message_guid='own-1'))
+            (data/'manifest.json').write_text(json.dumps(dict(training_policy=OWNER_POLICY,incoming_messages_included=0)))
             (data/'train.jsonl').write_text((json.dumps(example)+'\n')*3)
             (data/'valid.jsonl').write_text(json.dumps(example)+'\n')
             fake=types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args:CharacterTokenizer()))

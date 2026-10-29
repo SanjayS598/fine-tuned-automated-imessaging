@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config, jobs, contacts
 from .inbox import Inbox, supports_replies
+from .policy import owner_adapter
 
 STATIC = Path(__file__).parent / "static"
 
@@ -105,7 +106,7 @@ class App:
             connected,error = True,None
         except sqlite3.Error:
             connected,error = False,"Give this app Full Disk Access in macOS Settings, then reopen it."
-        trained = (Path(cfg["adapter_path"])/"personal-model.json").is_file()
+        trained = owner_adapter(cfg)
         return dict(enabled=cfg["enabled"],mode="preview" if cfg["dry_run"] else "live",
                     number=cfg["own_identities"][0],sender_verified=cfg["sender_verified"],
                     connected=connected,error=error,trained=trained,worker_running=self.worker_running(),
@@ -131,7 +132,7 @@ class App:
                 if payload["enabled"]:
                     if jobs.status().get("stage") in jobs.BUSY:
                         raise ValueError("Replies stay paused while your model is training.")
-                    if not (Path(cfg["adapter_path"])/"personal-model.json").is_file():
+                    if not owner_adapter(cfg):
                         raise ValueError("Train your model before starting replies.")
                     if not cfg["dry_run"] and not cfg["sender_verified"]:
                         raise ValueError("Confirm your sending number in Setup first.")

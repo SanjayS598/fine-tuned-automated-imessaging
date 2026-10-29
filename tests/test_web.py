@@ -103,10 +103,12 @@ class InboxTests(unittest.TestCase):
     def test_training_source_includes_group_and_rcs_chats(self):
         from imessage_bot.messages import Messages
         with sqlite3.connect(self.path) as db:
-            db.execute('INSERT INTO chat_message_join VALUES (2,1),(3,2)')
+            db.execute('INSERT INTO chat_message_join VALUES (2,1),(3,3)')
         source=Messages(self.path)
         self.assertEqual({x['chat_id'] for x in source.training_chats()},{1,2,3})
         self.assertEqual(source.orphan_history(),[])
+        self.assertTrue(all(x['is_from_me']==1 for x in source.training_history(1)))
+        self.assertEqual(len(source.training_history(1)),38)
 
     def test_training_blocks_enabling_replies(self):
         with patch('imessage_bot.web.jobs.status',return_value=dict(stage='training')):
@@ -179,9 +181,11 @@ class InboxTests(unittest.TestCase):
 
     def test_unicode_line_separators_do_not_break_training_json(self):
         from imessage_bot.training import train
+        from imessage_bot.policy import OWNER_POLICY, OWNER_PROMPT
         data=self.home/'data'
         data.mkdir()
-        example=dict(messages=[dict(role='system',content='s'),dict(role='user',content='hi\u2028there\u0085again'),dict(role='assistant',content='hey')])
+        example=dict(messages=[dict(role='system',content=config.load()['system_prompt']),dict(role='user',content=OWNER_PROMPT),dict(role='assistant',content='hi\u2028there\u0085again')],source=dict(is_from_me=1,message_guid='own-1'))
+        (data/'manifest.json').write_text(json.dumps(dict(training_policy=OWNER_POLICY,incoming_messages_included=0)))
         for name in ('train','valid'):
             (data/(name+'.jsonl')).write_text(json.dumps(example,ensure_ascii=False)+'\n')
         tokenizer=types.SimpleNamespace(apply_chat_template=lambda *args,**kwargs:[1,2,3])
@@ -189,7 +193,7 @@ class InboxTests(unittest.TestCase):
         with patch.dict('sys.modules',{'transformers':fake}),patch('imessage_bot.training.subprocess.run'):
             train(1)
         prepared=json.loads((self.home/'prepared_data/train.jsonl').read_text())
-        self.assertEqual(prepared['messages'][1]['content'],'hi\u2028there\u0085again')
+        self.assertEqual(prepared['messages'][2]['content'],'hi\u2028there\u0085again')
 
 
 if __name__=='__main__':

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import config
 from .messages import Messages
+from .policy import owner_adapter
 
 
 def doctor():
@@ -29,7 +30,7 @@ def doctor():
         print("Rich-text message decoder: installed")
     except ImportError:
         print("Rich-text decoder: missing. Run uv sync --extra mac.")
-    print("Trained adapter:", "present" if (Path(cfg['adapter_path'])/'personal-model.json').exists() else "not trained yet")
+    print("Owner-only trained adapter:", "present" if owner_adapter(cfg) else "not trained yet; mixed-context adapters are disabled")
     print("Sending number:", "manually verified" if cfg['sender_verified'] else "needs verification in Messages Settings")
     print("Apple Automation permission is requested on the first live send; doctor sends nothing.")
 

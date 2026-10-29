@@ -57,9 +57,10 @@ The main inbox shows real training progress: export coverage, preparation stage,
 completed/total optimizer steps, percentage of the current stage, elapsed time,
 and an estimated remaining time. Estimates update from MLX reports and can vary
 with conversation length. Reactions, system events and attachment-only messages
-are counted but excluded from text training. Incoming text provides context;
-your outgoing text supplies the assistant targets. Messages without chat links
-are also scanned, with standalone owner messages using neutral context.
+are counted but excluded from text training. Only rows marked `is_from_me = 1` are read by the training exporter.
+Incoming text is excluded from both prompts and targets. Each example pairs a
+fixed neutral prompt with one of your outgoing messages. Your outgoing messages without chat links
+are also scanned, using the same fixed neutral prompt.
 
 Use **Contacts → Connect contacts** to import names from macOS Contacts. Grant
 **Inbox Contacts** (or the app hosting Inbox) access under **System Settings →
@@ -139,8 +140,9 @@ uv run imessage-bot chat
 ```
 
 The model downloads from Hugging Face on first use. Training and inference run
-locally. The dataset maps incoming text to `user` and **your outgoing replies**
-to `assistant`. Prompt masking trains on the final assistant reply. Six-hour
+locally. The dataset pairs a fixed neutral `user` prompt with **your outgoing text** as
+`assistant`. Other people's messages are never included as training context.
+Prompt masking trains only on your text. Six-hour
 conversation sessions stay together in the train/validation split, avoiding
 overlapping context across those splits. At least three usable sessions are
 required. Reactions, system entries, and attachment-only messages are skipped;
@@ -148,15 +150,21 @@ attributed text is decoded with macOS Foundation when possible. Unsupported
 content is skipped rather than guessed.
 
 Before training, examples are checked against the real tokenizer's 1024-token
-budget. Older context pairs are removed first. Long replies are split into bounded
-targets with recent incoming context, preserving their text instead of dropping
-them. Outbound-first sessions receive a neutral conversation prompt.
+budget. Long replies are split into bounded
+targets with the same fixed neutral prompt, preserving their text instead of
+dropping them. No conversational history is placed in the training prompt.
 
 Review `.local/data/` and try the local chat before enabling live replies.
 Fine-tuning aims to learn style; it cannot guarantee accurate facts or a perfect
-imitation. Generated bot replies are tracked and sessions containing their
-matching outgoing text are excluded from future exports. This filtering only
+imitation. Generated bot replies are tracked and their matching outgoing messages
+are excluded from future exports. This filtering only
 covers sends recorded by this bot installation.
+
+Datasets and adapters carry an `owner_only_v1` policy marker. The trainer
+rejects legacy mixed-context datasets, and the bot refuses to load old adapters
+without this marker. An owner-only restart trains a fresh adapter from the base
+model; it never resumes a mixed-context checkpoint. Live replies still read
+incoming messages to answer them, without updating model weights.
 
 The GUI trains a new version in `.local/runs/<run-id>/` and preserves your
 current model until the new run completes successfully. Each GUI run makes one
