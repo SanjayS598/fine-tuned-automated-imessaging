@@ -69,6 +69,17 @@ class Messages:
     def history_through(self,chat_id,rowid,limit=20):
         return list(reversed(self.query(SELECT+" WHERE c.ROWID=? AND m.ROWID<=? ORDER BY m.ROWID DESC LIMIT ?",(chat_id,rowid,limit))))
 
+    def sent_receipt(self,chat_id,text,created):
+        rows=self.query('''SELECT m.guid,m.text,m.attributedBody,m.is_sent,m.is_delivered,m.is_read,m.error,m.date,m.date_delivered
+            FROM message m JOIN chat_message_join j ON j.message_id=m.ROWID
+            WHERE j.chat_id=? AND m.is_from_me=1 AND m.date>=? AND m.date<=?
+            ORDER BY abs(m.date-?) LIMIT 12''',(chat_id,(created-978307200-1)*1e9,(created-978307200+120)*1e9,(created-978307200)*1e9))
+        for row in rows:
+            if decode_text(row)!=text:continue
+            state='failed' if row['error'] else 'delivered' if row['is_delivered'] else 'sent' if row['is_sent'] else 'pending'
+            return dict(state=state,message_guid=row['guid'],error=row['error'],timestamp=978307200+(row['date_delivered'] or row['date'])/1e9)
+        return dict(state='submitted')
+
     def chats(self):
         return self.query("""SELECT c.ROWID AS chat_id, c.service_name AS service,
             h.id AS contact, count(cm.message_id) AS messages
@@ -122,7 +133,7 @@ def eligible(row, cfg):
     return row['style']==45 and row['participants']==1 and contact==sender and approved and contact not in cfg['own_identities']
 
 
-def conversation(rows, max_chars=6000, keep_leading=False,label_senders=False):
+def conversation(rows, max_chars=6000, keep_leading=False,label_senders=False,label_dates=False):
     turns = []
     speakers={}
     for row in rows:
@@ -132,6 +143,11 @@ def conversation(rows, max_chars=6000, keep_leading=False,label_senders=False):
         if not text:
             continue
         role = "assistant" if row["is_from_me"] else "user"
+        if label_dates:
+            from datetime import datetime
+            date=row.get('date',0)
+            timestamp=978307200+(date/1e9 if abs(date)>1e12 else date)
+            text='['+datetime.fromtimestamp(timestamp).strftime('%b %d %H:%M')+'] '+text
         if label_senders and role=='user':
             sender=row.get('sender') or 'unknown'
             speakers.setdefault(sender,len(speakers)+1)

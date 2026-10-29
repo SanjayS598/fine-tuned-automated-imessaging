@@ -46,6 +46,8 @@ class InboxTests(unittest.TestCase):
                     (f'm-{i}',f'message {i}',None,i%2,800000000000000000+i,0,0,1,0,1,1,0,None,None))
                 db.execute('INSERT INTO chat_message_join VALUES (1,?)',(i,))
             db.execute('INSERT INTO message_attachment_join VALUES (75,1)')
+            db.execute('ALTER TABLE message ADD COLUMN error INTEGER DEFAULT 0')
+            db.execute('ALTER TABLE message ADD COLUMN date_delivered INTEGER DEFAULT 0')
         config.update(lambda c:c.update(db_path=str(self.path)))
         self.app=App(0)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
@@ -245,6 +247,27 @@ class InboxTests(unittest.TestCase):
         self.assertIn('Enable Inbox',data['error'])
         self.assertEqual(self.request('/api/chats')[0],503)
         self.assertEqual(self.request('/api/control',dict(enabled=True))[0],400)
+
+    def test_delivery_receipt_matches_body_chat_and_send_time(self):
+        import time
+        from imessage_bot.messages import Messages
+        now=time.time()
+        date=int((now-978307200)*1e9)
+        with sqlite3.connect(self.path) as db:
+            db.execute('UPDATE message SET text=?,date=?,date_delivered=?,is_delivered=1,is_from_me=1 WHERE ROWID=75',('confirmed reply',date,date))
+        source=Messages(self.path)
+        self.assertEqual(source.sent_receipt(1,'confirmed reply',now)['state'],'delivered')
+        self.assertEqual(source.sent_receipt(1,'different reply',now)['state'],'submitted')
+        self.assertEqual(source.sent_receipt(2,'confirmed reply',now)['state'],'submitted')
+        from imessage_bot.state import State
+        state=State()
+        try:
+            guid,_=state.reserve_manual_send(1,'confirmed reply','receipt-test')
+            state.finish(guid,'sent')
+        finally:state.close()
+        status,body,_=self.request('/api/activity')
+        self.assertEqual(status,200)
+        self.assertEqual(body['activity'][0]['delivery']['state'],'delivered')
 
     def test_static_assets_have_private_browser_policy(self):
         status,body,headers=self.request('/')

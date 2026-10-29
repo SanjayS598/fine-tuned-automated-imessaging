@@ -20,6 +20,7 @@ from . import config, jobs, contacts
 from .inbox import Inbox, supports_replies
 from .policy import owner_adapter
 from .transport import SendError
+from .context import CONTEXT_MESSAGES
 
 STATIC = Path(__file__).parent / "static"
 
@@ -244,9 +245,13 @@ class App:
         try:
             rows=state.previews(chat_id)
             preview=dict(rows[0]) if rows and rows[0]['status'] in ('preview','manual_preview') else None
+            latest=next((dict(row) for row in rows if row['status'] in ('sent','sending','failed')),dict(rows[0]) if rows else None)
+            event=state.latest_event(chat_id)
         finally:state.close()
+        if latest and latest['status'] in ('sent','sending','failed'):
+            latest['delivery']=self.inbox().source.sent_receipt(chat_id,latest['reply'],latest['created'])
         job=dict(self.preview_job) if self.preview_job.get('chat_id')==chat_id else dict(stage='idle')
-        return dict(preview=preview,job=job)
+        return dict(preview=preview,job=job,latest_attempt=latest,worker_event=event)
 
     def start_preview(self,chat_id):
         cfg=config.load()
@@ -278,16 +283,21 @@ class App:
             approved['chat_settings'][str(chat_id)]=dict(enabled=True,instructions='')
             if not eligible(row,approved):
                 raise ValueError('The latest received message cannot be previewed.')
-            turns=conversation(source.history_through(chat_id,row['rowid']),label_senders=row['style']==43)
+            history=source.history_through(chat_id,row['rowid'],limit=cfg.get('context_messages',CONTEXT_MESSAGES))
+            turns=conversation(history,label_senders=row['style']==43,label_dates=True,keep_leading=True)
             key=(cfg['model'],cfg['adapter_path'])
             if self.preview_model is None or self.preview_model_key!=key:
                 self.preview_model=Model(cfg)
                 self.preview_model_key=key
-            reply=self.preview_model.reply(turns,reply_config(cfg,chat_id,group=row['style']==43))
+            model_cfg=reply_config(cfg,chat_id,group=row['style']==43)
+            model_cfg['_context_message_count']=len(history)
+            model_cfg['_progress']=lambda stage:setattr(self,'preview_job',dict(stage='generating',phase=stage,chat_id=chat_id))
+            reply=self.preview_model.reply(turns,model_cfg)
             if not reply:
                 raise ValueError('The model returned no usable reply. Try generating again.')
             state=State()
             guid=state.save_manual_preview(row,reply)
+            state.context(guid,getattr(self.preview_model,'last_context',{}))
             self.preview_job=dict(stage='ready',chat_id=chat_id,guid=guid)
         except Exception as exc:
             error=str(exc) if isinstance(exc,ValueError) else f'Preview failed ({type(exc).__name__}). Check app.log.'
@@ -376,7 +386,11 @@ class Handler(BaseHTTPRequestHandler):
                 from .state import State
                 state = State()
                 try:
-                    self.respond(200,{"activity":[dict(x) for x in state.previews()]})
+                    rows=[dict(x) for x in state.previews()]
+                    for row in rows:
+                        if row['status'] in ('sent','sending'):
+                            row['delivery']=self.app.inbox().source.sent_receipt(row['chat_id'],row['reply'],row['created'])
+                    self.respond(200,{"activity":rows})
                 finally:
                     state.close()
             elif url.path.startswith("/api/attachments/"):

@@ -96,6 +96,27 @@ The UI binds only to loopback. Message APIs and attachments require a private
 session, and changes require same-origin requests. No conversations, phone
 numbers, or screenshots are published with the public repository.
 
+## Conversation context and reply delivery
+
+Reply generation reads up to **120 recent messages** from the selected chat,
+with timestamps and group speaker labels, within an **8,192-token input budget**.
+Older context is trimmed first while retaining the latest question. Leading
+owner messages are preserved so an earlier stated time or plan is not discarded
+just because the history window starts with your message.
+
+A local base-model pass drafts an answer from that context. Your trained model
+then applies personal style; numeric/time checks and a local meaning check reject
+rewrites that change the answer, falling back to the grounded wording. Both
+passes use the already-installed local model; no conversation is uploaded and
+no incoming text is used for fine-tuning. This improves grounding but does not
+guarantee that every generated answer is correct.
+
+The chat shows reply progress (queued, reading context, generating, sending, or
+a reason it was skipped) and the last send's delivery state. A **Delivered** label
+is backed by a matching outgoing entry in the Messages database, rather than
+only AppleScript acceptance. Unknown delivery stays pending/submitted; the app
+does not resend it automatically. Activity also shows delivery status.
+
 ## Training progress and Contacts
 
 The main inbox shows real training progress: export coverage, preparation stage,

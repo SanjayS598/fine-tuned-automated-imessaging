@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { chats: [], selected: null, messages: [], status: null, filter: 'all', query: '', hasMore: false, loading: false, dirty: false, request: 0, preview: null, previewJob: {}, lastActivity: null, draftDirty: false, draftSource: null, sending: false, sendRequest: null };
+const state = { chats: [], selected: null, messages: [], status: null, filter: 'all', query: '', hasMore: false, loading: false, dirty: false, request: 0, preview: null, previewJob: {}, lastActivity: null, draftDirty: false, draftSource: null, sending: false, sendRequest: null, latestAttempt: null, workerEvent: null };
 let toastTimer;
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
@@ -109,6 +109,7 @@ async function selectChat(id) {
   state.messages = [];
   state.preview = null;
   state.previewJob = {};
+  state.latestAttempt = null; state.workerEvent = null;
   state.draftDirty = false; state.draftSource = null; state.sendRequest = null;
   $('preview-body').value = '';
   renderPreview();
@@ -171,6 +172,20 @@ function renderPreview() {
   $('send-message').textContent = state.sending ? 'Sending…' : 'Send ↗';
   $('preview-explanation').textContent = 'Edit or write a message, then click Send. Auto handles new incoming messages after you enable it.';
   $('preview-status').textContent = busy ? 'Loading your model and generating a preview. Nothing will be sent.' : state.previewJob.stage === 'failed' ? state.previewJob.error : state.preview ? `Generated ${new Date(state.preview.created * 1000).toLocaleString()} · Preview only, not sent.` : 'Preview the latest received message now, even if it arrived before you enabled replies.';
+  const latest = state.latestAttempt, event = state.workerEvent;
+  $('reply-diagnostics').classList.toggle('hidden', !latest && !event);
+  const receipt = latest?.delivery;
+  const phase = { queued: 'New message received; waiting for the message burst.', loading_model: 'Loading the local models…', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage];
+  if (phase && (!latest || event.created > latest.created)) $('reply-delivery').textContent = phase;
+  else if (event && (!latest || event.created > latest.created) && ['skipped', 'failed', 'cancelled'].includes(event.stage)) $('reply-delivery').textContent = event.detail;
+  else if (latest?.status === 'failed') $('reply-delivery').textContent = latest.error || 'The last send failed.';
+  else if (receipt?.state === 'failed') $('reply-delivery').textContent = `Messages reported a delivery error (${receipt.error}). Check the conversation in Messages.`;
+  else if (receipt?.state === 'delivered') $('reply-delivery').textContent = `Delivered at ${timeFormat.format(new Date(receipt.timestamp * 1000))}: “${latest.reply}”`;
+  else if (latest?.status === 'sent') $('reply-delivery').textContent = `Handed to Messages: “${latest.reply}” · Awaiting delivery confirmation.`;
+  else $('reply-delivery').textContent = event?.detail || ({ queued: 'New message received; waiting for the message burst.', reading_context: 'Reading the conversation context…', loading_context_model: 'Loading the local context model…', generating_reply: 'Generating a context-aware reply…', personalizing_reply: 'Applying your texting style…', checking_reply: 'Checking that the style rewrite preserved the answer…', sending: 'Sending the reply…' }[event?.stage] || 'Draft ready; waiting for Send.');
+  let metrics = {};
+  try { metrics = JSON.parse((state.preview || latest)?.context_info || '{}'); } catch {}
+  $('reply-context').textContent = metrics.context_tokens ? `${state.preview ? 'Draft' : 'Reply'} context: ${metrics.context_turns} turns from up to ${metrics.context_messages_available} recent messages · ${metrics.context_tokens.toLocaleString()} tokens · ${metrics.style_fallback ? 'Grounded wording retained to preserve meaning.' : 'Personal style checked against the grounded reply.'}` : '';
 }
 
 async function loadPreview() {
@@ -180,6 +195,8 @@ async function loadPreview() {
   if (request !== state.request) return;
   state.preview = result.preview;
   state.previewJob = result.job;
+  state.latestAttempt = result.latest_attempt;
+  state.workerEvent = result.worker_event;
   renderPreview();
 }
 
@@ -287,7 +304,11 @@ async function refresh(initial = false) {
     await loadPreview();
     const activity = await api('/api/activity');
     const newest = activity.activity[0]?.guid || null;
-    if (state.lastActivity !== null && newest && newest !== state.lastActivity && ['preview', 'manual_preview'].includes(activity.activity[0]?.status)) toast('New reply preview is ready. View it in the chat or Activity.');
+    if (state.lastActivity !== null && newest && newest !== state.lastActivity) {
+      if (['preview', 'manual_preview'].includes(activity.activity[0]?.status)) toast('New reply preview is ready. View it in the chat or Activity.');
+      else if (activity.activity[0]?.status === 'sent') toast(activity.activity[0]?.delivery?.state === 'delivered' ? 'Auto reply delivered.' : 'Reply sent to Messages.');
+      else if (activity.activity[0]?.status === 'failed') toast(activity.activity[0]?.error || 'The last send failed.', true);
+    }
     state.lastActivity = newest || 'none';
     if (state.selected && !state.loading) {
       const request = state.request, id = state.selected;
@@ -335,7 +356,8 @@ async function activity() {
     for (const item of data.activity) {
       const card = element('article', 'activity-item'), header = element('header');
       const chat = state.chats.find(x => x.id === item.chat_id);
-      header.append(element('span', '', chat?.title || 'Conversation'), element('span', 'activity-status', item.status));
+      const label = item.delivery?.state === 'delivered' ? 'Delivered' : item.delivery?.state === 'failed' ? 'Delivery failed' : { sent: 'Sent to Messages', preview: 'Draft', manual_preview: 'Draft', failed: 'Send failed', approved_sent: 'Approved and sent', sending: 'Sending' }[item.status] || item.status;
+      header.append(element('span', '', chat?.title || 'Conversation'), element('span', 'activity-status', label));
       card.append(header, element('p', '', item.reply), element('small', 'small-label', new Date(item.created * 1000).toLocaleString()));
       if (item.error) card.append(element('p', '', `Delivery uncertain (${item.error}). This reply will not be retried.`));
       fragment.append(card);

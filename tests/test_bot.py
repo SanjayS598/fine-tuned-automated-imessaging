@@ -42,8 +42,8 @@ class FakeMessages:
     def new(self, after):
         return [r for r in self.rows if r['rowid'] > after]
 
-    def history(self, chat):
-        return [r for r in self.rows if r['chat_id'] == chat]
+    def history(self, chat,limit=20):
+        return [r for r in self.rows if r['chat_id'] == chat][-limit:]
 
 
 class BotTests(unittest.TestCase):
@@ -190,6 +190,20 @@ class BotTests(unittest.TestCase):
         self.receive()
         self.assertIn('Use lowercase. Keep it short.',captured[0])
         self.assertEqual(self.cfg['system_prompt'],'test')
+
+    def test_reply_uses_more_than_twenty_messages_of_context(self):
+        captured=[]
+        class ContextModel:
+            def __init__(self,cfg):pass
+            def reply(self,turns,cfg):
+                captured.append((turns,cfg['_context_message_count']))
+                return '6 at the library'
+        self.worker.factory=ContextModel
+        self.source.rows=[message(i+1,is_from_me=int(i%2==1),text='agreed fact 6 at the library' if i==10 else 'earlier conversation') for i in range(80)]
+        self.worker.cursor=80
+        self.receive(message(81,text='what time did we agree?'))
+        self.assertEqual(captured[0][1],81)
+        self.assertIn('agreed fact 6 at the library',str(captured[0][0]))
 
     def test_stale_message_is_skipped(self):
         self.receive(message(date=int((time.time()-APPLE_EPOCH-600)*1e9)))
