@@ -160,7 +160,10 @@ function renderMessages() {
     }
     const row = element('div', 'message-row' + (message.is_from_me ? ' own' : ''));
     row.dataset.message = message.id;
-    if (!message.is_from_me && chat?.participants.length > 1) row.append(element('div', 'message-sender', message.sender || 'Participant'));
+    if (!message.is_from_me && chat?.participants.length > 1) {
+      const participant = chat.participants.indexOf(message.sender);
+      row.append(element('div', 'message-sender', chat.participant_names?.[participant] || message.sender || 'Participant'));
+    }
     if (message.subject) row.append(element('strong', 'message-sender', message.subject));
     if (message.text) row.append(element('div', 'message-bubble', message.text));
     for (const attachment of message.attachments) {

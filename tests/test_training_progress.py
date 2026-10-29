@@ -1,4 +1,6 @@
 import tempfile
+import json
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -42,6 +44,26 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(parse_report('Iter 100: Val loss 2.100, Val took 1s',1000)['validation_loss'],2.1)
         self.assertEqual(parse_report('Iter 500: Saved adapter weights to /private/local',1000)['last_checkpoint_step'],500)
 
+    def test_invalid_loss_stops_instead_of_freezing_progress(self):
+        for value in ('nan','inf','-inf'):
+            line=f'Iter 60: Train loss {value}, Learning Rate 1e-5, It/sec 2.000, Tokens/sec 42.000, Trained Tokens 1234, Peak mem 2.100 GB'
+            with self.assertRaises(ValueError):
+                parse_report(line,1000)
+        with self.assertRaises(ValueError):
+            parse_report('Iter 100: Val loss nan, Val took 1s',1000)
+
+    def test_token_budget_requests_token_list_with_new_transformers(self):
+        class NewTokenizer(CharacterTokenizer):
+            def apply_chat_template(self,messages,**kwargs):
+                tokens=super().apply_chat_template(messages,**kwargs)
+                return tokens if kwargs.get('return_dict') is False else dict(input_ids=tokens,attention_mask=[1]*len(tokens))
+        target='owner reply '*500
+        entry=dict(messages=[dict(role='system',content='s'),dict(role='user',content='u'*4000),dict(role='assistant',content=target)])
+        parts=prepare_entry(entry,NewTokenizer())
+        self.assertGreater(len(parts),1)
+        self.assertEqual(''.join(x['messages'][-1]['content'] for x in parts),target)
+        self.assertTrue(all(len(NewTokenizer().apply_chat_template(x['messages'],return_dict=False))<=1024 for x in parts))
+
     def test_interrupted_run_retains_previous_progress(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
             jobs.write_status(stage='training',pid=999999999,steps_completed=100,steps_total=1000,progress_percent=10)
@@ -53,6 +75,45 @@ class ProgressTests(unittest.TestCase):
         records=[dict(name='Sample Person',addresses=['(202) 555-0101','SAMPLE@EXAMPLE.COM','short']),dict(name='',addresses=['2025550102'])]
         index=contacts.index_contacts(records)
         self.assertEqual(index,{'+12025550101':'Sample Person','sample@example.com':'Sample Person'})
+
+    def test_default_training_steps_cover_every_prepared_example(self):
+        from imessage_bot.training import train
+        with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
+            config.initialize('2025550199')
+            data=Path(folder)/'data'
+            data.mkdir()
+            example=dict(messages=[dict(role='system',content='s'),dict(role='user',content='question'),dict(role='assistant',content='reply')])
+            (data/'train.jsonl').write_text((json.dumps(example)+'\n')*3)
+            (data/'valid.jsonl').write_text(json.dumps(example)+'\n')
+            fake=types.SimpleNamespace(AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args:CharacterTokenizer()))
+            with patch.dict('sys.modules',{'transformers':fake}),patch('imessage_bot.training.subprocess.run') as run:
+                metadata=train()
+            argv=run.call_args.args[0]
+            self.assertEqual(argv[argv.index('--iters')+1],'3')
+            self.assertEqual(metadata['passes'],1)
+
+    def test_failed_retraining_preserves_previous_model(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
+            config.initialize('2025550199')
+            original=config.load()['adapter_path']
+            with patch('imessage_bot.training.export'),patch('imessage_bot.training.train',side_effect=RuntimeError('test')):
+                with self.assertRaises(RuntimeError):
+                    jobs.main()
+            self.assertEqual(config.load()['adapter_path'],original)
+            self.assertEqual(jobs.status()['stage'],'failed')
+
+    def test_successful_training_promotes_only_finished_version(self):
+        with tempfile.TemporaryDirectory() as folder,patch.object(config,'HOME',Path(folder)):
+            config.initialize('2025550199')
+            original=config.load()['adapter_path']
+            def completed(**kwargs):
+                self.assertEqual(config.load()['adapter_path'],original)
+                return dict(iterations=3)
+            with patch('imessage_bot.training.export'),patch('imessage_bot.training.train',side_effect=completed):
+                jobs.main()
+            self.assertNotEqual(config.load()['adapter_path'],original)
+            self.assertFalse(config.load()['enabled'])
+            self.assertEqual(jobs.status()['progress_percent'],100)
 
 
 if __name__=='__main__':

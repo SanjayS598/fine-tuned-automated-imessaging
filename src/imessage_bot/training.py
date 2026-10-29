@@ -129,7 +129,7 @@ def export(contacts=None, output_dir=None, progress=None):
 
 def fit_example(entry, tokenizer, limit=1024):
     messages = list(entry['messages'])
-    while len(tokenizer.apply_chat_template(messages,tokenize=True,add_generation_prompt=False))>limit:
+    while len(tokenizer.apply_chat_template(messages,tokenize=True,add_generation_prompt=False,return_dict=False))>limit:
         if len(messages)<=3:
             return None
         del messages[1:3]
@@ -143,13 +143,25 @@ def prepare_entry(entry,tokenizer,limit=1024):
     # Preserve long owner replies by splitting their target tokens. Keep the
     # recent incoming context, instead of dropping an otherwise usable message.
     system,user,target = entry['messages'][0],entry['messages'][-2],entry['messages'][-1]
-    tokens = tokenizer.encode(target['content'],add_special_tokens=False)
     results = []
-    for offset in range(0,len(tokens),limit//2):
-        content = tokenizer.decode(tokens[offset:offset+limit//2])
-        recent = tokenizer.decode(tokenizer.encode(user['content'],add_special_tokens=False)[-limit//4:])
+    text,offset=target['content'],0
+    while offset<len(text):
+        # Split on Unicode character boundaries: decoding arbitrary token slices
+        # can corrupt multi-token emoji or other UTF-8 characters at the edges.
+        low,high=1,min(len(text)-offset,limit*2)
+        while low<=high:
+            middle=(low+high)//2
+            if len(tokenizer.encode(text[offset:offset+middle],add_special_tokens=False))<=limit//2:
+                low=middle+1
+            else:
+                high=middle-1
+        if high<1:
+            raise ValueError('A character exceeds the training token budget.')
+        content=text[offset:offset+high]
+        offset+=high
+        recent=user['content'][-limit:]
         messages = [system,dict(role='user',content=recent),dict(role='assistant',content=content)]
-        while len(tokenizer.apply_chat_template(messages,tokenize=True,add_generation_prompt=False))>limit:
+        while len(tokenizer.apply_chat_template(messages,tokenize=True,add_generation_prompt=False,return_dict=False))>limit:
             if not messages[1]['content']:
                 raise ValueError('System prompt exceeds the training token budget. Shorten it before training.')
             messages[1]['content'] = messages[1]['content'][len(messages[1]['content'])//2+1:]
@@ -157,20 +169,24 @@ def prepare_entry(entry,tokenizer,limit=1024):
     return results
 
 
-TRAIN_REPORT = re.compile(r'Iter (\d+): Train loss ([\d.eE+-]+),.*?It/sec ([\d.eE+-]+),.*?Trained Tokens ([\d.eE+-]+), Peak mem ([\d.eE+-]+) GB')
-VAL_REPORT = re.compile(r'Iter (\d+): Val loss ([\d.eE+-]+)')
+TRAIN_REPORT = re.compile(r'Iter (\d+): Train loss ([^,]+),.*?It/sec ([\d.eE+-]+),.*?Trained Tokens ([\d.eE+-]+), Peak mem ([\d.eE+-]+) GB')
+VAL_REPORT = re.compile(r'Iter (\d+): Val loss ([^,\s]+)')
 
 
 def parse_report(line,total):
     match = TRAIN_REPORT.search(line)
     if match:
         step,loss,speed,tokens,memory = map(float,match.groups())
+        if not math.isfinite(loss):
+            raise ValueError('Non-finite training loss. Stopping this run; the previous model is preserved.')
         return dict(stage='training',steps_completed=int(step),steps_total=total,
                     examples_seen=int(step),progress_percent=round(min(100,100*step/total),2),
                     train_loss=loss,steps_per_second=speed,trained_tokens=int(tokens),peak_memory_gb=memory,
                     eta_seconds=round((total-step)/speed) if speed>0 else None)
     match = VAL_REPORT.search(line)
     if match:
+        if not math.isfinite(float(match[2])):
+            raise ValueError('Non-finite validation loss. Stopping this run.')
         return dict(stage='validating',validation_loss=float(match[2]))
     if 'Saved adapter weights to' in line:
         match = re.search(r'Iter (\d+)',line)
@@ -227,15 +243,23 @@ def train(iters=None,data_dir=None,adapter_dir=None,progress=None):
     command=[sys.executable,'-u','-m','mlx_lm','lora','--model',cfg['model'],
              '--train','--data',str(prepared),'--adapter-path',str(adapter),
              '--iters',str(steps),'--batch-size','1','--max-seq-length','1024',
-             '--mask-prompt','--grad-checkpoint','--steps-per-report','10',
+             '--mask-prompt','--grad-checkpoint','--steps-per-report','1',
              '--steps-per-eval','1000','--save-every','500','--seed','42']
     if progress:
         with subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1) as child:
-            for line in child.stdout:
-                print(line,end='',flush=True)
-                report=parse_report(line,steps)
-                if report:
-                    progress(**report)
+            try:
+                for line in child.stdout:
+                    print(line,end='',flush=True)
+                    report=parse_report(line,steps)
+                    if report:
+                        progress(**report)
+            except BaseException:
+                child.terminate()
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                raise
             result=child.wait()
             if result:
                 raise subprocess.CalledProcessError(result,command)

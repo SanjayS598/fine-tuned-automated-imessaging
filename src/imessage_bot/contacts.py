@@ -1,8 +1,11 @@
 """Import names and addresses from macOS Contacts into private local storage."""
 import json
 import os
-import threading
+import plistlib
+import subprocess
 import time
+import uuid
+from pathlib import Path
 
 from . import config
 
@@ -42,6 +45,32 @@ def save(**values):
     temp.replace(path)
 
 
+def native_sync():
+    """Use an app with a usage description when Python has no bundle identity."""
+    folder=config.HOME/'Inbox Contacts.app'
+    executable=folder/'Contents/MacOS/InboxContacts'
+    source=Path(__file__).parent/'native/ContactsSync.swift'
+    if not executable.exists() or source.stat().st_mtime>executable.stat().st_mtime:
+        executable.parent.mkdir(parents=True,exist_ok=True)
+        info=dict(CFBundleIdentifier='local.inbox.contacts',CFBundleName='Inbox Contacts',
+                  CFBundleDisplayName='Inbox Contacts',CFBundleExecutable='InboxContacts',
+                  CFBundleVersion='1',CFBundlePackageType='APPL',LSUIElement=True,
+                  NSContactsUsageDescription='Show contact names beside your conversations in your local Inbox. Your contacts stay on this Mac.')
+        with (folder/'Contents/Info.plist').open('wb') as stream:
+            plistlib.dump(info,stream)
+        subprocess.run(['/usr/bin/xcrun','swiftc',str(source),'-o',str(executable),'-framework','Contacts','-framework','AppKit'],check=True)
+    # Finder metadata on generated app bundles is not accepted by codesign.
+    # Strip it only from our own helper, and retry signing after a failed build.
+    subprocess.run(['/usr/bin/xattr','-cr',str(folder)],check=True)
+    subprocess.run(['/usr/bin/codesign','--force','--sign','-','--identifier','local.inbox.contacts',str(folder)],check=True)
+    result=config.HOME/('contacts-import-'+uuid.uuid4().hex+'.json')
+    try:
+        subprocess.run(['/usr/bin/open','-W','-n',str(folder),'--args',str(result)],check=True,timeout=120)
+        return json.loads(result.read_text())
+    finally:
+        result.unlink(missing_ok=True)
+
+
 def sync(request=False):
     previous=snapshot()
     def report(**values):
@@ -54,12 +83,13 @@ def sync(request=False):
         authorization=CNContactStore.authorizationStatusForEntityType_(CNEntityTypeContacts)
         if authorization==0 and request:
             report(stage='requesting',pid=os.getpid())
-            done=threading.Event()
-            store.requestAccessForEntityType_completionHandler_(CNEntityTypeContacts,lambda granted,error:done.set())
-            if not done.wait(60):
-                report(stage='permission_needed',error='Respond to the macOS Contacts permission prompt, then sync again.')
-                return
-            authorization=CNContactStore.authorizationStatusForEntityType_(CNEntityTypeContacts)
+            result=native_sync()
+            if result.get('stage')=='connected':
+                records=result['records']
+                save(stage='connected',count=len(records),index=index_contacts(records),limited=result.get('limited',False))
+            else:
+                report(stage='permission_needed',error='Allow Inbox Contacts in macOS Settings → Privacy & Security → Contacts, then retry.')
+            return
         if authorization not in (3,4):
             report(stage='permission_needed',error='Allow Contacts access for the app running Inbox in macOS Settings → Privacy & Security → Contacts.')
             return

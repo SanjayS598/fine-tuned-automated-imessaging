@@ -62,12 +62,19 @@ your outgoing text supplies the assistant targets. Messages without chat links
 are also scanned, with standalone owner messages using neutral context.
 
 Use **Contacts → Connect contacts** to import names from macOS Contacts. Grant
-the app hosting Inbox access under **System Settings → Privacy & Security →
-Contacts** if needed, then retry. Names match normalized phone numbers and email
+**Inbox Contacts** (or the app hosting Inbox) access under **System Settings →
+Privacy & Security → Contacts** if needed, then retry. A small helper app is
+compiled locally on first use so macOS can display a proper permission prompt;
+this requires Apple's command line developer tools. It only reads Contacts.
+Names match normalized phone numbers and email
 addresses. Only names and addresses are cached, in ignored `.local/contacts.json`.
 Contact names are used for display and do not change the recipient identifiers
 or get added to training targets. Limited Contacts access shows only the names
 macOS permits. Use Refresh contacts after editing your address book.
+
+The interface uses a monochrome glass theme: translucent panels, rounded
+controls, and black-and-white message bubbles. Reduced-motion and
+reduced-transparency preferences are supported.
 
 ## Hardware and accounts
 
