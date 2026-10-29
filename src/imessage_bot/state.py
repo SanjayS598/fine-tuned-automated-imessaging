@@ -24,9 +24,9 @@ class State:
         now = time.time() if now is None else now
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            recent = self.db.execute("SELECT count(*) FROM attempts WHERE created>? AND status!='manual_preview'",
+            recent = self.db.execute("SELECT count(*) FROM attempts WHERE created>? AND guid NOT LIKE 'manual-%'",
                                      (now - 3600,)).fetchone()[0]
-            last = self.db.execute("SELECT max(created) FROM attempts WHERE chat_id=? AND status!='manual_preview'",
+            last = self.db.execute("SELECT max(created) FROM attempts WHERE chat_id=? AND guid NOT LIKE 'manual-%'",
                                    (row["chat_id"],)).fetchone()[0]
             if recent >= cfg["max_per_hour"] or (last is not None and now-last < cfg["cooldown_seconds"]):
                 return False
@@ -50,6 +50,25 @@ class State:
             self.db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?,?)',
                             (guid,row['chat_id'],time.time(),'manual_preview',reply,digest(reply),None))
         return guid
+
+    def reserve_manual_send(self,chat_id,text,request_id,preview_guid=None):
+        guid='manual-send-'+request_id
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            if self.db.execute('SELECT 1 FROM attempts WHERE guid=?',(guid,)).fetchone():
+                return guid,False
+            if preview_guid:
+                original=self.db.execute('SELECT chat_id,status FROM attempts WHERE guid=?',(preview_guid,)).fetchone()
+                if not original or original['chat_id']!=chat_id or original['status'] not in ('preview','manual_preview'):
+                    raise ValueError('This draft has already been sent or is no longer available. Generate a new draft if needed.')
+                self.db.execute("UPDATE attempts SET status='manual_sending' WHERE guid=?",(preview_guid,))
+            self.db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?,?)',
+                            (guid,chat_id,time.time(),'sending',text,digest(text),None))
+        return guid,True
+
+    def attempt(self,guid):
+        row=self.db.execute('SELECT guid,chat_id,created,status,reply,error FROM attempts WHERE guid=?',(guid,)).fetchone()
+        return dict(row) if row else None
 
     def previews(self,chat_id=None):
         query='SELECT guid,chat_id,created,status,reply,error FROM attempts'

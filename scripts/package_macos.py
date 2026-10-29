@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import hashlib
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,6 +26,30 @@ from imessage_bot.policy import owner_adapter
 
 def copy_directory(source,destination):
     subprocess.run(['/usr/bin/ditto','--norsrc',str(source),str(destination)],check=True)
+
+
+def engine_update(data_home):
+    target=data_home/'engine'
+    stage=data_home/('engine-stage-'+str(time.time_ns()))
+    shutil.copytree(ROOT/'src',stage/'src',ignore=shutil.ignore_patterns('__pycache__','*.pyc','.DS_Store'))
+    previous=None
+    if target.exists():
+        previous=data_home/('engine-previous-'+str(time.time_ns()))
+        target.rename(previous)
+    try:
+        stage.rename(target)
+    except BaseException:
+        if previous:previous.rename(target)
+        raise
+    if previous:shutil.rmtree(previous)
+
+
+def wrapper_fingerprint():
+    digest=hashlib.sha256()
+    for path in (ROOT/'macos/Inbox.swift',ROOT/'macos/MakeIcon.swift',ROOT/'uv.lock'):
+        digest.update(path.read_bytes())
+    digest.update(sys.version.encode())
+    return digest.hexdigest()
 
 
 def prepare_private_data(destination):
@@ -94,12 +119,20 @@ def build(output,data_home,replace=False):
         raise ValueError('This builder requires macOS on Apple Silicon.')
     if sys.version_info[:2]!=(3,12):
         raise ValueError('Build with the project Python 3.12 environment.')
+    fingerprint=wrapper_fingerprint()
     if output.exists():
         if not replace:
             raise ValueError(f'{output} already exists. Quit Inbox and use --replace to update it.')
         with (output/'Contents/Info.plist').open('rb') as stream:
-            if plistlib.load(stream).get('CFBundleIdentifier')!='local.personal-inbox.app':
+            installed_info=plistlib.load(stream)
+            if installed_info.get('CFBundleIdentifier')!='local.personal-inbox.app':
                 raise ValueError('The existing app is not Inbox. It was preserved.')
+        if installed_info.get('InboxWrapperFingerprint')==fingerprint:
+            prepare_private_data(data_home)
+            engine_update(data_home)
+            subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(output)],check=True)
+            print('Updated the private engine and UI. The signed launcher and its macOS permission identity are unchanged.',flush=True)
+            return
     # Desktop can be backed by a File Provider that immediately restores Finder
     # attributes. Build/sign outside it and install the executable locally.
     build_folder=Path(tempfile.mkdtemp(prefix='inbox-macos-build-'))
@@ -126,6 +159,7 @@ def build(output,data_home,replace=False):
               NSContactsUsageDescription='Show your contact names in your private local inbox.',
               NSAppleEventsUsageDescription='Send replies through Messages only for conversations you enable.',
               NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True,NSAllowsArbitraryLoadsInWebContent=True))
+    info['InboxWrapperFingerprint']=fingerprint
     with (contents/'Info.plist').open('wb') as stream:
         plistlib.dump(info,stream)
     print('Building the native window and app icon…',flush=True)
@@ -134,6 +168,7 @@ def build(output,data_home,replace=False):
     make_icon(resources,build_folder)
     print('Copying your trained model and settings into private Application Support…',flush=True)
     prepare_private_data(data_home)
+    engine_update(data_home)
     env=dict(os.environ,PYTHONHOME=str(runtime),PYTHONPATH=str(source),PYTHONNOUSERSITE='1',
              PYTHONDONTWRITEBYTECODE='1',IMESSAGE_BOT_HOME=str(data_home),HF_HUB_OFFLINE='1')
     print('Checking the bundled runtime, model and native libraries…',flush=True)

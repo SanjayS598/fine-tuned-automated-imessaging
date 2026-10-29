@@ -13,6 +13,11 @@ def reply_config(cfg,chat_id,group=False):
     return result
 
 
+def sends_automatically(cfg,chat_id):
+    mode=cfg.get('chat_settings',{}).get(str(chat_id),{}).get('reply_mode')
+    return mode=='auto' if mode is not None else not cfg['dry_run']
+
+
 class Model:
     def __init__(self, cfg):
         if not owner_adapter(cfg):

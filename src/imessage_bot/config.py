@@ -55,8 +55,11 @@ def load():
     cfg["own_identities"] = [normalize(x) for x in cfg["own_identities"]]
     cfg.setdefault("chat_settings", {})
     for chat_id, settings in cfg["chat_settings"].items():
+        settings.setdefault('reply_mode','manual')
         if not chat_id.isdigit() or type(settings.get("enabled")) is not bool or not isinstance(settings.get("instructions", ""), str):
             raise ValueError("Invalid per-chat settings.")
+        if settings['reply_mode'] not in ('manual','auto'):
+            raise ValueError('Invalid per-chat reply mode.')
     return cfg
 
 

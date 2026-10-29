@@ -146,6 +146,45 @@ class InboxTests(unittest.TestCase):
         self.assertNotIn('1',config.load()['chat_settings'])
         self.assertFalse(config.load()['enabled'])
 
+    def test_auto_click_arms_only_selected_chat_and_starts_engine(self):
+        config.update(lambda c:c.update(sender_verified=True,chat_settings={'1':dict(enabled=True,instructions='')}))
+        with patch('imessage_bot.web.owner_adapter',return_value=True),patch.object(self.app,'ensure_worker') as start:
+            status,chat,_=self.request('/api/chats/2',dict(reply_mode='auto',enabled=True))
+        self.assertEqual(status,200)
+        self.assertEqual(chat['reply_mode'],'auto')
+        cfg=config.load()
+        self.assertTrue(cfg['enabled'])
+        self.assertEqual(cfg['chat_settings']['1']['reply_mode'],'manual')
+        self.assertEqual(cfg['chat_settings']['2']['reply_mode'],'auto')
+        self.assertIn('watch_after_rowid',cfg)
+        start.assert_called_once()
+
+    def test_manual_send_uses_exact_group_and_retries_are_idempotent(self):
+        from imessage_bot.state import State
+        config.update(lambda c:c.update(sender_verified=True))
+        state=State()
+        preview=state.save_manual_preview(dict(chat_id=2),'draft')
+        state.close()
+        payload=dict(text='approved group reply',request_id='request-1234567890',preview_guid=preview)
+        with patch('imessage_bot.transport.send') as send:
+            status,body,_=self.request('/api/chats/2/send',payload)
+            self.assertEqual(status,200)
+            self.assertEqual(body['attempt']['status'],'sent')
+            self.assertEqual(self.request('/api/chats/2/send',payload)[0],200)
+            self.assertEqual(self.request('/api/chats/2/send',dict(payload,request_id='different-1234567890'))[0],400)
+            send.assert_called_once_with('iMessage;+;group','approved group reply')
+        self.assertFalse(config.load()['enabled'])
+        self.assertIsNone(self.app.preview_status(2)['preview'])
+
+    def test_manual_send_reports_messages_automation_permission_error(self):
+        from imessage_bot.transport import SendError
+        config.update(lambda c:c.update(sender_verified=True))
+        with patch('imessage_bot.transport.send',side_effect=SendError('Enable Messages automation.')):
+            status,body,_=self.request('/api/chats/1/send',dict(text='hello',request_id='request-1234567890'))
+        self.assertEqual(status,502)
+        self.assertIn('automation',body['error'])
+        self.assertTrue(body['retry_safe'])
+
     def test_group_is_not_enabled_by_member_allowlist(self):
         config.update(lambda c:c.update(allowed_contacts=['+12025550101']))
         _,data,_=self.request('/api/chats')

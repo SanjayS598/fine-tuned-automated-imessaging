@@ -22,7 +22,11 @@ offline inference.
 Private settings, the trained adapter, cached Contacts and future training runs
 live in `~/Library/Application Support/Personal Inbox/`, outside the app bundle.
 The initial package imports your current trained owner-only model and starts
-paused in preview mode. Rebuilding preserves that private app data.
+paused in preview mode. Rebuilding preserves that private app data. Engine/UI code lives privately in
+`engine/` there. Routine updates replace that engine without modifying the signed
+native launcher, preserving its macOS permission identity. A new native launcher
+or dependency set still requires a full app rebuild and may need macOS access
+to be re-enabled once.
 
 On first launch, macOS requires the new **Inbox** app to have its own **Full Disk
 Access**, even if your terminal already has it. In **System Settings → Privacy &
@@ -68,16 +72,17 @@ files cannot be displayed; attachment previews are limited to 40 MB.
 
 Select a chat to:
 
-- Toggle **Auto reply** for that exact conversation.
+- Click **Auto** (or the Auto send switch) to start live replies for that exact conversation immediately. The worker starts automatically; no extra master-switch step is required.
 - Add **A little direction** instructions, then click **Save instructions**.
-- Choose **Preview** or **Send automatically**, and use the top master switch
-  to enable or pause replies across all selected chats.
+- Choose **Manual** to review generated drafts, edit them, and click **Send**. You can also type a message directly. The top switch pauses or resumes all enabled chats without changing their individual modes.
 - Inspect generated previews and delivery attempts in **Activity**.
 
 **Setup** shows the Messages connection, lets you confirm your sending number,
 and starts local training. Training pauses replies and continues while you
-browse. Once trained, enabling the master switch starts the reply worker
-automatically. Closing the UI browser tab leaves the server and worker running;
+browse. Once trained, choosing Manual or Auto for a chat starts the worker
+automatically. Manual creates drafts; Auto generates and sends on new incoming
+messages. Existing enabled chats migrate to Manual until you explicitly choose
+Auto for each one, so enabling one chat does not start sending in other chats. Closing the UI browser tab leaves the server and worker running;
 stopping the UI server pauses replies and stops the worker it started.
 
 Auto replies support direct and group iMessage, SMS/MMS and RCS conversations
@@ -236,17 +241,26 @@ uv run imessage-bot off
 
 **Automatic previews only trigger on NEW incoming messages after enabling
 replies.** A chat toggle does not replay the historical inbox. Preview text now
-appears directly in the selected conversation and in Activity. Use **Preview
-latest message** to generate a draft for the latest received text immediately,
+appears directly in the selected conversation and in Activity. Use **Generate reply** to generate a draft for the latest received text immediately,
 even if it is old or replies are paused. Manual previews never send, never
 consume an incoming message for automatic replies, and do not count against
-automatic reply rate limits.
+automatic reply rate limits. Edit or type text in the draft box and click **Send**
+to deliver it to the selected direct or group conversation. Send uses a unique
+request ID and claims the draft to prevent duplicate submission. Permission
+errors are displayed directly; uncertain sends are never retried automatically.
 
 Previews are saved locally and never sent. Changing settings discards pending
 replies. Starting or restarting the worker ignores the existing inbox, including
 messages received while it was stopped. Enabling after a pause also starts fresh.
 
 ## 5. Enable automated replies
+
+In the GUI, select the conversation and click **Auto**. This selects live sending
+for that chat, enables the engine and starts the worker in one action. The Auto
+send switch has the same effect. Manual mode and other chats remain unchanged.
+The following CLI controls remain available for advanced use; explicit per-chat
+GUI modes take precedence over the legacy global preview/live setting.
+
 
 After testing your model and verifying the number:
 

@@ -4,9 +4,9 @@ import time
 
 from . import config
 from .messages import Messages, conversation, eligible,clean,decode_text
-from .model import Model,reply_config
+from .model import Model,reply_config,sends_automatically
 from .state import State
-from .transport import send
+from .transport import send,SendError
 
 LOG = logging.getLogger(__name__)
 APPLE_EPOCH = 978307200
@@ -35,7 +35,12 @@ class Runner:
         # Revision is incremented by all CLI mutations.
         if cfg != self.active_cfg:
             self.pending.clear()
-            self.cursor = self.messages.max_id()
+            # The UI records the inbox cursor at the click, so a message arriving
+            # before this poll is still observed. Old workers/configs start fresh.
+            if cfg.get('watch_after_rowid') is not None and (self.active_cfg is not None or time.time()-cfg.get('watch_after_at',0)<10):
+                self.cursor=cfg['watch_after_rowid']
+            else:
+                self.cursor = self.messages.max_id()
             self.active_cfg = cfg
         if not cfg["enabled"]:
             self.cursor = self.messages.max_id()
@@ -87,9 +92,13 @@ class Runner:
         # freshness and manual replies again immediately before reserving a send.
         if not reply or not self.current(row, cfg):
             return
-        if not self.state.reserve(row, reply, cfg):
+        automatic=sends_automatically(cfg,row['chat_id'])
+        if automatic and not cfg['sender_verified']:
+            raise ValueError('Verify the sending number before automatic sending.')
+        effective=dict(cfg,dry_run=not automatic)
+        if not self.state.reserve(row, reply, effective):
             return
-        if cfg["dry_run"]:
+        if not automatic:
             LOG.info("Preview saved. Use previews to inspect it.")
             return
         if not self.current(row, cfg):
@@ -99,7 +108,7 @@ class Runner:
             self.sender(row["chat_guid"], reply)
         except Exception as exc:
             # Delivery can be ambiguous after an AppleScript timeout: never retry.
-            self.state.finish(row["message_guid"], "failed", type(exc).__name__)
+            self.state.finish(row["message_guid"], "failed",str(exc) if isinstance(exc,SendError) else type(exc).__name__)
             raise
         self.state.finish(row["message_guid"], "sent")
         LOG.info("Reply handed to Messages (delivery not confirmed).")

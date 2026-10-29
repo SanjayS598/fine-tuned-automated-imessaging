@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import webbrowser
+import re
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from . import config, jobs, contacts
 from .inbox import Inbox, supports_replies
 from .policy import owner_adapter
+from .transport import SendError
 
 STATIC = Path(__file__).parent / "static"
 
@@ -66,12 +68,13 @@ class App:
                 return dict(row,title=title,participant_names=participants)
             return [dict(named(row), reply_supported=supports_replies(row,cfg),
                          auto_reply=self.chat_settings(row,cfg)["enabled"],
+                         reply_mode=self.chat_settings(row,cfg).get('reply_mode','manual'),
                          instructions=self.chat_settings(row,cfg)["instructions"]) for row in self.cached_chats]
 
     @staticmethod
     def chat_settings(chat,cfg):
         fallback = any(config.normalize(x) in cfg["allowed_contacts"] for x in chat["participants"] if "@" in x or any(c.isdigit() for c in x)) if chat['style']==45 and supports_replies(chat,cfg) else False
-        return cfg.get("chat_settings",{}).get(str(chat["id"]),dict(enabled=fallback,instructions=""))
+        return cfg.get("chat_settings",{}).get(str(chat["id"]),dict(enabled=fallback,instructions="",reply_mode='manual'))
 
     def chat(self,chat_id):
         return next((c for c in self.chats() if c["id"] == chat_id),None)
@@ -80,6 +83,9 @@ class App:
         def revisioned(cfg):
             edit(cfg)
             cfg["revision"] = cfg.get("revision",0)+1
+            if cfg['enabled']:
+                from .messages import Messages
+                cfg.update(watch_after_rowid=Messages(cfg['db_path']).max_id(),watch_after_at=time.time())
         return config.update(revisioned)
 
     def worker_running(self):
@@ -113,9 +119,12 @@ class App:
             if cfg.get('packaged_data'):
                 error='Enable Inbox in System Settings → Privacy & Security → Full Disk Access. Add Inbox from your Applications folder, then quit and reopen Inbox.'
         trained = owner_adapter(cfg)
+        automatic=sum(bool(value['enabled'] and value.get('reply_mode')=='auto') for value in cfg['chat_settings'].values())
+        manual=sum(bool(value['enabled'] and value.get('reply_mode','manual')=='manual') for value in cfg['chat_settings'].values())
         return dict(enabled=cfg["enabled"],mode="preview" if cfg["dry_run"] else "live",
                     number=cfg["own_identities"][0],sender_verified=cfg["sender_verified"],
                     connected=connected,error=error,trained=trained,worker_running=self.worker_running(),
+                    automatic_chats=automatic,manual_chats=manual,
                     training=jobs.status(),model=cfg["model"],
                     contacts={key:value for key,value in contacts.snapshot().items() if key!='index'})
 
@@ -142,7 +151,7 @@ class App:
                         raise ValueError("Replies stay paused while your model is training.")
                     if not owner_adapter(cfg):
                         raise ValueError("Train your model before starting replies.")
-                    if not cfg["dry_run"] and not cfg["sender_verified"]:
+                    if (not cfg["dry_run"] or any(value['enabled'] and value.get('reply_mode')=='auto' for value in cfg['chat_settings'].values())) and not cfg["sender_verified"]:
                         raise ValueError("Confirm your sending number in Setup first.")
                     if not cfg["allowed_contacts"] and not any(x["enabled"] for x in cfg["chat_settings"].values()):
                         raise ValueError("Enable auto replies for at least one conversation first.")
@@ -156,7 +165,7 @@ class App:
         chat = self.chat(chat_id)
         if not chat:
             raise ValueError("Conversation not found.")
-        if not payload or set(payload)-{"enabled","instructions"}:
+        if not payload or set(payload)-{"enabled","instructions","reply_mode"}:
             raise ValueError("Unknown conversation setting.")
         if "enabled" in payload and type(payload["enabled"]) is not bool:
             raise ValueError("Enabled must be true or false.")
@@ -164,18 +173,77 @@ class App:
             raise ValueError("This conversation has no supported Messages recipients.")
         if "instructions" in payload and (not isinstance(payload["instructions"],str) or len(payload["instructions"])>4000):
             raise ValueError("Instructions must be text, up to 4000 characters.")
+        if 'reply_mode' in payload and payload['reply_mode'] not in ('manual','auto'):
+            raise ValueError('Choose Manual or Auto.')
+        activate='reply_mode' in payload and payload.get('enabled',True)
+        if activate:
+            if not self.status()['connected']:
+                raise ValueError('Messages access is required. Open Full Disk Access settings in Setup.')
+            if not owner_adapter(config.load()):
+                raise ValueError('Train your owner-only model before enabling replies.')
+            if jobs.status().get('stage') in jobs.BUSY:
+                raise ValueError('Replies stay paused during training.')
+            if payload['reply_mode']=='auto' and not config.load()['sender_verified']:
+                raise ValueError('Confirm the sending number in Setup first.')
         def edit(cfg):
             current = dict(self.chat_settings(chat,cfg))
             current.update(payload)
+            if activate:
+                current['enabled']=True
+                cfg['enabled']=True
             cfg["chat_settings"][str(chat_id)] = current
+            if not any(value['enabled'] for value in cfg['chat_settings'].values()) and not cfg['allowed_contacts']:
+                cfg['enabled']=False
         self.mutate(edit)
+        if activate:self.ensure_worker()
         return self.chat(chat_id)
+
+    def manual_send(self,chat_id,payload):
+        from .transport import send
+        from .state import State
+        if not {'text','request_id'}<=set(payload) or set(payload)-{'text','request_id','preview_guid'} or not isinstance(payload['text'],str) or not payload['text'].strip() or len(payload['text'])>4000:
+            raise ValueError('Write a message up to 4000 characters.')
+        if not isinstance(payload['request_id'],str) or not re.fullmatch(r'[A-Za-z0-9-]{16,80}',payload['request_id']):
+            raise ValueError('A unique send request is required.')
+        if payload.get('preview_guid') is not None and (not isinstance(payload['preview_guid'],str) or len(payload['preview_guid'])>256):
+            raise ValueError('Invalid draft identifier.')
+        chat=self.chat(chat_id)
+        if not chat or not chat['reply_supported']:
+            raise ValueError('Choose a supported Messages conversation.')
+        cfg=config.load()
+        if not cfg['sender_verified']:
+            raise ValueError('Confirm your sending number in Setup first.')
+        if not self.status()['connected']:
+            raise ValueError('Messages access is required before sending.')
+        state=State()
+        try:
+            preview_guid=payload.get('preview_guid')
+            guid,reserved=state.reserve_manual_send(chat_id,payload['text'].strip(),payload['request_id'],preview_guid)
+            if not reserved:
+                previous=state.attempt(guid)
+                if previous['chat_id']!=chat_id or previous['reply']!=payload['text'].strip():
+                    raise ValueError('This send request was already used for another message.')
+                return dict(attempt=previous,duplicate=True)
+            # Cancels a pending automatic reply for this chat before an explicit
+            # manual response is handed to Messages. No global mode is changed.
+            self.mutate(lambda c:None)
+            try:
+                send(chat['guid'],payload['text'].strip())
+            except Exception as exc:
+                state.finish(guid,'failed',str(exc) if isinstance(exc,SendError) else type(exc).__name__)
+                if preview_guid:state.finish(preview_guid,'manual_preview' if isinstance(exc,SendError) and not exc.uncertain else 'approval_failed')
+                raise
+            state.finish(guid,'sent')
+            if preview_guid:state.finish(preview_guid,'approved_sent')
+            return dict(attempt=state.attempt(guid),duplicate=False)
+        finally:state.close()
 
     def preview_status(self,chat_id):
         from .state import State
         state=State()
         try:
-            preview=next((dict(row) for row in state.previews(chat_id) if row['status'] in ('preview','manual_preview')),None)
+            rows=state.previews(chat_id)
+            preview=dict(rows[0]) if rows and rows[0]['status'] in ('preview','manual_preview') else None
         finally:state.close()
         job=dict(self.preview_job) if self.preview_job.get('chat_id')==chat_id else dict(stage='idle')
         return dict(preview=preview,job=job)
@@ -345,6 +413,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,self.app.control(payload))
             elif self.path.startswith('/api/chats/') and self.path.endswith('/preview'):
                 self.respond(202,self.app.start_preview(int(self.path.split('/')[3])))
+            elif self.path.startswith('/api/chats/') and self.path.endswith('/send'):
+                self.respond(200,self.app.manual_send(int(self.path.split('/')[3]),payload))
             elif self.path.startswith("/api/chats/"):
                 self.respond(200,self.app.update_chat(int(self.path.rsplit("/",1)[1]),payload))
             elif self.path == "/api/train":
@@ -364,6 +434,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,{'opened':True})
             else:
                 self.respond(404,{"error":"Not found."})
+        except SendError as exc:
+            self.respond(502,{'error':str(exc),'retry_safe':not exc.uncertain})
         except (ValueError,TypeError,KeyError) as exc:
             self.respond(400,{"error":str(exc)})
         except Exception:

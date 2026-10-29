@@ -75,7 +75,11 @@ final class InboxApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
         guard let resources = Bundle.main.resourceURL else { fail("App resources are missing."); return }
         let pythonHome = resources.appendingPathComponent("Python")
         let executable = pythonHome.appendingPathComponent("bin/python3.12")
-        let source = resources.appendingPathComponent("app/src")
+        // Keep the signed launcher stable across ordinary engine/UI updates.
+        // Engine files are installed in the user's private Application Support.
+        let installedEngine = home.appendingPathComponent("engine/src")
+        let source = FileManager.default.fileExists(atPath: installedEngine.appendingPathComponent("imessage_bot/cli.py").path)
+            ? installedEngine : resources.appendingPathComponent("app/src")
         let process = Process()
         process.executableURL = executable
         process.arguments = ["-u", "-m", "imessage_bot.cli", "ui", "--port", String(port), "--no-open"]

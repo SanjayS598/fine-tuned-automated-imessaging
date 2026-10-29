@@ -91,6 +91,27 @@ class BotTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         self.assertFalse(self.state.reserve(message(), 'again', self.cfg, time.time()+40))
 
+    def test_chat_auto_mode_sends_even_if_legacy_global_preview(self):
+        self.cfg['chat_settings']={'1':dict(enabled=True,reply_mode='auto')}
+        self.worker.tick()
+        self.receive()
+        self.assertEqual(len(self.sent),1)
+
+    def test_manual_mode_never_sends_even_if_legacy_global_live(self):
+        self.cfg.update(dry_run=False,chat_settings={'1':dict(enabled=True,reply_mode='manual')})
+        self.worker.tick()
+        self.receive()
+        self.assertFalse(self.sent)
+        self.assertEqual(self.state.previews()[0]['status'],'preview')
+
+    def test_message_after_auto_click_before_next_poll_is_not_lost(self):
+        now=time.time()
+        self.cfg.update(watch_after_rowid=0,watch_after_at=now,chat_settings={'1':dict(enabled=True,reply_mode='auto')})
+        self.source.rows.append(message())
+        self.worker.tick(now)
+        self.worker.tick(now+9)
+        self.assertEqual(len(self.sent),1)
+
     def test_old_inbox_is_never_replayed(self):
         self.source.rows.append(message())
         worker = Runner(self.source, self.state, loader=lambda: self.cfg)
@@ -301,6 +322,15 @@ class BotTests(unittest.TestCase):
         argv = run.call_args.args[0]
         self.assertEqual(argv[-1],payload)
         self.assertNotIn(payload,argv[2])
+
+    def test_transport_distinguishes_permission_denial_from_uncertain_delivery(self):
+        import subprocess
+        from imessage_bot.transport import SendError
+        for code,uncertain in (('-1743',False),('-1712',True),('-1728',False)):
+            with patch('imessage_bot.transport.subprocess.run',side_effect=subprocess.CalledProcessError(1,['osascript'],stderr='Error '+code)):
+                with self.assertRaises(SendError) as error:
+                    send('iMessage;+;group','test')
+            self.assertEqual(error.exception.uncertain,uncertain)
 
     def test_private_configuration_defaults(self):
         config.initialize('2025550199')
