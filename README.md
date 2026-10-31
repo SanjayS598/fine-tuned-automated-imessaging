@@ -2,9 +2,6 @@
 
 A local Mac bot that learns your texting style from your own outgoing messages
 and automatically replies in selected direct and group Messages conversations.
-Built from the workflow in [devk03/imessage-finetuning](https://github.com/devk03/imessage-finetuning);
-see [NOTICE.md](NOTICE.md) and the preserved [original scripts](upstream/).
-
 It starts **paused, in preview mode, with an empty contact allowlist**.
 An always-running worker watches only new incoming messages. You control which
 contacts it can reply to and whether it saves previews or sends replies.
